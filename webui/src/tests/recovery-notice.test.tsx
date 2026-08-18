@@ -27,6 +27,29 @@ describe("RecoveryNotice", () => {
     expect(onContinue).toHaveBeenCalledOnce();
   });
 
+  it("uses the shared status surface and motion treatment", () => {
+    render(
+      <RecoveryNotice
+        state={{ status: "resuming", recovery_id: "recovery-1" }}
+        onContinue={vi.fn().mockResolvedValue(undefined)}
+        onDismiss={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    const notice = screen.getByRole("status");
+    expect(notice).toHaveAttribute("data-recovery-status", "resuming");
+    expect(notice).toHaveAttribute("aria-live", "polite");
+    expect(notice).toHaveClass(
+      "max-w-[49.5rem]",
+      "rounded-control",
+      "animate-in",
+      "fade-in-0",
+      "slide-in-from-bottom-1",
+      "duration-200",
+      "motion-reduce:animate-none",
+    );
+  });
+
   it("keeps the notice visible when Continue fails", async () => {
     const onContinue = vi.fn().mockRejectedValue(new Error("offline"));
 

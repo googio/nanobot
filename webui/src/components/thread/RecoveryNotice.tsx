@@ -3,6 +3,7 @@ import { AlertTriangle, LoaderCircle, RotateCcw, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import type { RecoveryState } from "@/lib/types";
 
 interface RecoveryNoticeProps {
@@ -48,7 +49,10 @@ export function RecoveryNotice({ state, onContinue, onDismiss }: RecoveryNoticeP
   return (
     <div
       role={waiting ? "alert" : "status"}
-      className="mx-auto mb-2 flex w-full max-w-[49.5rem] items-center gap-3 rounded-control border border-border/70 bg-muted/35 px-3 py-2 text-sm"
+      aria-live={waiting ? "assertive" : "polite"}
+      aria-busy={state.status === "resuming"}
+      data-recovery-status={state.status}
+      className="mx-auto mb-2 flex w-full max-w-[49.5rem] items-center gap-3 rounded-control border border-border/70 bg-muted/35 px-3 py-2 text-sm transition-[background-color,border-color,opacity,transform] duration-200 ease-out motion-reduce:transition-none animate-in fade-in-0 slide-in-from-bottom-1 duration-200 motion-reduce:animate-none"
     >
       {waiting ? (
         <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden />
@@ -59,7 +63,10 @@ export function RecoveryNotice({ state, onContinue, onDismiss }: RecoveryNoticeP
         <p className="font-medium">
           {title}
         </p>
-        <p className="mt-0.5 text-xs text-muted-foreground">
+        <p className={cn(
+          "mt-0.5 text-xs",
+          error ? "text-destructive" : "text-muted-foreground",
+        )}>
           {error ?? detail}
         </p>
       </div>
