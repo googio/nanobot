@@ -8,6 +8,7 @@ whether an interrupted tool call is safe to replay.
 from __future__ import annotations
 
 import dataclasses
+import json
 from collections.abc import Iterable, Mapping
 from datetime import datetime
 from typing import Any, Protocol, cast
@@ -31,12 +32,17 @@ RUNTIME_CHECKPOINT_KEY = "runtime_checkpoint"
 PENDING_USER_TURN_KEY = "pending_user_turn"
 RECOVERY_METADATA_KEY = "webui_recovery"
 RECOVERY_INBOUND_METADATA_KEY = "_webui_recovery_id"
+PENDING_FOLLOWUPS_KEY = "pending_user_followups"
+PENDING_FOLLOWUP_ID_KEY = "_recovery_followup_id"
 PROVIDER_STATE_CHECKPOINT_VERSION_KEY = "provider_state_checkpoint_version"
 PROVIDER_STATE_CHECKPOINT_VERSION = "v1"
 
 _RECOVERY_STATUSES = frozenset({"resuming", "awaiting_user", "recovered", "failed"})
 _AUTO_CONTINUE_PHASES = frozenset({"tools_completed"})
 _UNCERTAIN_TOOL_PHASES = frozenset({"awaiting_tools"})
+_KNOWN_CHECKPOINT_PHASES = frozenset(
+    {"final_response", "tools_completed", "awaiting_tools", "error"}
+)
 
 
 class RecoveryActionError(ValueError):
@@ -51,6 +57,95 @@ class RecoveryAdmission(Protocol):
     """Narrow AgentLoop boundary for queued recovery validation."""
 
     async def admit(self, message: InboundMessage) -> bool: ...
+
+
+def record_pending_followup(session: Session, message: InboundMessage) -> str | None:
+    """Durably journal a WebUI follow-up before injecting it into a live turn."""
+    if message.channel != "websocket":
+        return None
+    try:
+        metadata_value: object = json.loads(json.dumps(message.metadata))
+    except (TypeError, ValueError):
+        logger.warning("Skipping non-serializable WebUI follow-up for recovery")
+        return None
+    if not isinstance(metadata_value, dict):
+        return None
+    followup_id = uuid4().hex
+    records = _pending_followup_records(session)
+    records.append(
+        {
+            "id": followup_id,
+            "sender_id": message.sender_id,
+            "chat_id": message.chat_id,
+            "content": message.content,
+            "media": list(message.media or []),
+            "metadata": metadata_value,
+        }
+    )
+    session.metadata[PENDING_FOLLOWUPS_KEY] = records[-20:]
+    session.updated_at = datetime.now()
+    return followup_id
+
+
+def pending_followups(session: Session) -> list[InboundMessage]:
+    """Decode still-unacknowledged follow-ups from durable session metadata."""
+    messages: list[InboundMessage] = []
+    for record in _pending_followup_records(session):
+        followup_id = cast(object, record.get("id"))
+        sender_id = cast(object, record.get("sender_id"))
+        chat_id = cast(object, record.get("chat_id"))
+        content = cast(object, record.get("content"))
+        metadata = cast(object, record.get("metadata"))
+        if (
+            not isinstance(followup_id, str)
+            or not followup_id
+            or not isinstance(sender_id, str)
+            or not sender_id
+            or not isinstance(chat_id, str)
+            or not chat_id
+        ):
+            continue
+        if not isinstance(content, str) or not isinstance(metadata, dict):
+            continue
+        media_value = cast(object, record.get("media"))
+        media = (
+            [item for item in cast(list[object], media_value) if isinstance(item, str)]
+            if isinstance(media_value, list)
+            else []
+        )
+        messages.append(
+            InboundMessage(
+                channel="websocket",
+                sender_id=sender_id,
+                chat_id=chat_id,
+                content=content,
+                media=media,
+                metadata={**cast(dict[str, Any], metadata), PENDING_FOLLOWUP_ID_KEY: followup_id},
+                session_key_override=session.key,
+                require_existing_session=True,
+            )
+        )
+    return messages
+
+
+def acknowledge_pending_followups(session: Session, followup_ids: Iterable[str]) -> None:
+    """Remove journal entries whose user rows were committed to history."""
+    acknowledged = set(followup_ids)
+    if not acknowledged:
+        return
+    records = [record for record in _pending_followup_records(session) if record.get("id") not in acknowledged]
+    if records:
+        session.metadata[PENDING_FOLLOWUPS_KEY] = records
+    else:
+        session.metadata.pop(PENDING_FOLLOWUPS_KEY, None)
+
+
+def _pending_followup_records(session: Session) -> list[dict[str, Any]]:
+    raw = cast(object, session.metadata.get(PENDING_FOLLOWUPS_KEY))
+    if not isinstance(raw, list):
+        return []
+    values = cast(list[object], raw)
+    return [cast(dict[str, Any], value) for value in values if isinstance(value, dict)]
 
 
 def _checkpoint_message_key(message: Mapping[str, Any]) -> tuple[Any, ...]:
@@ -227,6 +322,7 @@ class RecoveryCoordinator:
                 continue
             try:
                 await self._recover_session(session, route[1])
+                await self._requeue_pending_followups(session)
             except Exception:
                 logger.exception("failed to recover interrupted WebUI session {}", session.key)
                 recovery_id = self._recovery_id(session)
@@ -394,6 +490,19 @@ class RecoveryCoordinator:
         recovery_id = uuid4().hex
         phase = checkpoint.get("phase") if checkpoint is not None else None
         pending_calls = checkpoint.get("pending_tool_calls") if checkpoint is not None else None
+        if checkpoint is not None and phase not in _KNOWN_CHECKPOINT_PHASES:
+            restore_runtime_checkpoint(session)
+            waiting = self._set_state(
+                session,
+                status="awaiting_user",
+                recovery_id=recovery_id,
+                attempts=0,
+                reason="checkpoint_unknown",
+                message="The interrupted task has an unknown recovery state. Review it before continuing.",
+            )
+            self.sessions.save(session)
+            await self._publish(chat_id, waiting, session_updated=True)
+            return
         if phase == "final_response":
             restore_runtime_checkpoint(session)
             recovered = self._set_state(
@@ -463,6 +572,11 @@ class RecoveryCoordinator:
                 require_existing_session=True,
             )
         )
+
+    async def _requeue_pending_followups(self, session: Session) -> None:
+        """Return durable live-turn follow-ups to the bus after a restart."""
+        for message in pending_followups(session):
+            await self.bus.publish_inbound(message)
 
     @staticmethod
     def _recovery_id(session: Session) -> str:

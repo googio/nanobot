@@ -869,6 +869,10 @@ def _run_gateway(
             await cron.start()
             # Re-read once on first admission to close the watcher subscription window.
             agent.runtime_resolver.invalidate()
+            # Recovery must finish before WebSocket and other channels begin
+            # accepting new input.  That makes a new user message reliably
+            # supersede an old recoverable turn instead of racing its queue.
+            await recovery.scan()
             async def _run_agent() -> None:
                 try:
                     await mcp_provider.connect()
@@ -905,10 +909,6 @@ def _run_gateway(
                 asyncio.create_task(
                     _monitor_local_clients(),
                     name="nanobot-gateway-client-monitor",
-                ),
-                asyncio.create_task(
-                    recovery.scan(),
-                    name="nanobot-webui-recovery",
                 ),
             ]
             if health_server_enabled:
@@ -955,6 +955,8 @@ def _run_gateway(
                     with suppress(asyncio.CancelledError):
                         await shutdown_task
                 cron.stop()
+                if gateway_runtime.preserves_inflight_turns_on_exit():
+                    agent.preserve_inflight_turns_on_shutdown()
                 agent.stop()
                 # Cancel runtime tasks first, then deterministically close
                 # exec/MCP resources while the event loop is still alive.

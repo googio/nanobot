@@ -10,11 +10,15 @@ from nanobot.bus.outbound_events import RecoveryStateEvent, SessionUpdatedEvent
 from nanobot.bus.queue import MessageBus
 from nanobot.session.manager import Session, SessionManager
 from nanobot.session.recovery import (
+    PENDING_FOLLOWUPS_KEY,
     PENDING_USER_TURN_KEY,
     RECOVERY_METADATA_KEY,
     RUNTIME_CHECKPOINT_KEY,
     RecoveryActionError,
     RecoveryCoordinator,
+    acknowledge_pending_followups,
+    pending_followups,
+    record_pending_followup,
 )
 
 
@@ -47,6 +51,38 @@ async def test_restart_before_model_call_auto_continues_once(tmp_path: Path) -> 
     assert restored.metadata[PENDING_USER_TURN_KEY] is True
     assert restored.metadata[RECOVERY_METADATA_KEY]["status"] == "resuming"
     assert restored.metadata[RECOVERY_METADATA_KEY]["attempts"] == 1
+
+
+@pytest.mark.asyncio
+async def test_live_turn_followup_survives_restart_until_it_is_committed(tmp_path: Path) -> None:
+    """A message injected mid-turn is not lost between checkpoints."""
+    sessions = SessionManager(tmp_path)
+    session = sessions.get_or_create("websocket:chat")
+    _persist(sessions, session)
+    followup_id = record_pending_followup(
+        session,
+        InboundMessage(
+            channel="websocket",
+            sender_id="user",
+            chat_id="chat",
+            content="also check the logs",
+            metadata={"webui": True},
+        ),
+    )
+    assert followup_id is not None
+    sessions.save(session)
+
+    coordinator, bus, restarted = _coordinator(tmp_path)
+    await coordinator.scan()
+
+    queued = bus.inbound.get_nowait()
+    assert queued.content == "also check the logs"
+    assert queued.metadata["_recovery_followup_id"] == followup_id
+    restored = restarted.get_or_create("websocket:chat")
+    assert len(pending_followups(restored)) == 1
+
+    acknowledge_pending_followups(restored, [followup_id])
+    assert PENDING_FOLLOWUPS_KEY not in restored.metadata
 
 
 @pytest.mark.asyncio
@@ -114,6 +150,25 @@ async def test_uncertain_tool_is_never_replayed_automatically(tmp_path: Path) ->
     event = bus.outbound.get_nowait().event
     assert isinstance(event, RecoveryStateEvent)
     assert event.status == "awaiting_user"
+
+
+@pytest.mark.asyncio
+async def test_unknown_checkpoint_never_auto_continues(tmp_path: Path) -> None:
+    """Malformed or newer checkpoint phases fail closed pending confirmation."""
+    sessions = SessionManager(tmp_path)
+    session = sessions.get_or_create("websocket:chat")
+    session.messages.append({"role": "user", "content": "deploy it"})
+    session.metadata[PENDING_USER_TURN_KEY] = True
+    session.metadata[RUNTIME_CHECKPOINT_KEY] = {"phase": "future_phase"}
+    _persist(sessions, session)
+
+    coordinator, bus, restarted = _coordinator(tmp_path)
+    await coordinator.scan()
+
+    assert bus.inbound.empty()
+    restored = restarted.get_or_create("websocket:chat")
+    assert restored.metadata[RECOVERY_METADATA_KEY]["status"] == "awaiting_user"
+    assert restored.metadata[RECOVERY_METADATA_KEY]["reason"] == "checkpoint_unknown"
 
 
 @pytest.mark.asyncio

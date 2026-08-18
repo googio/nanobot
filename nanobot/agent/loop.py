@@ -85,6 +85,12 @@ from nanobot.session.model_selection import (
     SESSION_MODEL_PRESET_METADATA_KEY,
     model_preset_from_metadata,
 )
+from nanobot.session.recovery import (
+    PENDING_FOLLOWUP_ID_KEY,
+    RecoveryAdmission,
+    acknowledge_pending_followups,
+    record_pending_followup,
+)
 from nanobot.triggers.local_turns import LocalTriggerTurnCoordinator
 from nanobot.utils.cancellation import task_is_cancelling
 from nanobot.utils.document import reference_non_image_attachments
@@ -103,7 +109,6 @@ if TYPE_CHECKING:
         ToolsConfig,
     )
     from nanobot.cron.service import CronService
-    from nanobot.session.recovery import RecoveryAdmission
     from nanobot.triggers.local_store import LocalTriggerStore
 
 _T = TypeVar("_T")
@@ -417,6 +422,7 @@ class AgentLoop:
         # When a session has an active task, new messages for that session
         # are routed here instead of creating a new task.
         self._pending_queues: dict[str, asyncio.Queue[InboundMessage]] = {}
+        self._preserve_inflight_turns_on_shutdown = False
         self._deferred_automation_turns: dict[str, list[InboundMessage]] = {}
         self._cron_turns = CronTurnCoordinator(
             publish_inbound=self.bus.publish_inbound,
@@ -1060,6 +1066,9 @@ class AgentLoop:
                         row["subagent_task_id"] = task_id
                     row[HIDDEN_HISTORY_META] = subagent_marker
                     row["injected_event"] = "subagent_result"
+                followup_id = metadata.get(PENDING_FOLLOWUP_ID_KEY)
+                if isinstance(followup_id, str) and followup_id:
+                    row[PENDING_FOLLOWUP_ID_KEY] = followup_id
                 return row
 
             items: list[dict[str, Any]] = []
@@ -1300,9 +1309,23 @@ class AgentLoop:
                             msg,
                             session_key_override=effective_key,
                         )
+                    session = self.sessions.get_or_create(effective_key)
+                    followup_id = record_pending_followup(session, pending_msg)
+                    if followup_id is not None:
+                        pending_msg = dataclasses.replace(
+                            pending_msg,
+                            metadata={
+                                **pending_msg.metadata,
+                                PENDING_FOLLOWUP_ID_KEY: followup_id,
+                            },
+                        )
+                        self.sessions.save(session)
                     try:
                         self._pending_queues[effective_key].put_nowait(pending_msg)
                     except asyncio.QueueFull:
+                        if followup_id is not None:
+                            acknowledge_pending_followups(session, [followup_id])
+                            self.sessions.save(session)
                         logger.warning(
                             "Pending queue full for session {}, falling back to queued task",
                             effective_key,
@@ -1321,6 +1344,16 @@ class AgentLoop:
                 task.add_done_callback(active_tasks.discard)
         finally:
             await self.aclose()
+
+    def preserve_inflight_turns_on_shutdown(self) -> None:
+        """Keep durable checkpoints when the owning gateway is restarting.
+
+        Normal cancellation intentionally materializes partial output so a
+        stopped gateway leaves a readable conversation.  A managed restart is
+        different: RecoveryCoordinator needs the checkpoint intact to safely
+        continue the unfinished turn after the new gateway is ready.
+        """
+        self._preserve_inflight_turns_on_shutdown = True
 
     async def _dispatch(self, msg: InboundMessage) -> None:
         """Process a message: per-session serial, cross-session concurrent."""
@@ -1380,7 +1413,10 @@ class AgentLoop:
                     # _emit_checkpoint during tool execution; materializing
                     # it into session history now makes it visible in the
                     # next conversation turn.
-                    if session_key in self._discarding_sessions:
+                    if (
+                        session_key in self._discarding_sessions
+                        or self._preserve_inflight_turns_on_shutdown
+                    ):
                         raise
                     try:
                         key = self._effective_session_key(msg)
@@ -2109,8 +2145,21 @@ class AgentLoop:
             if m.get("role") == "tool" and m.get("tool_call_id")
         }
         last_assistant_idx: int | None = None
+        saved_followup_ids: set[str] = set()
         for m in messages[skip:]:
             entry = dict(m)
+            followup_id_value = cast(object, entry.pop(PENDING_FOLLOWUP_ID_KEY, None))
+            followup_ids = (
+                [followup_id_value]
+                if isinstance(followup_id_value, str)
+                else [
+                    followup_id
+                    for followup_id in cast(list[object], followup_id_value)
+                    if isinstance(followup_id, str)
+                ]
+                if isinstance(followup_id_value, list)
+                else []
+            )
             internal_meta = cast(object, entry.pop("_meta", None))
             runtime_context_meta = (
                 cast(dict[str, Any], internal_meta).get(
@@ -2163,6 +2212,8 @@ class AgentLoop:
                     entry[RUNTIME_CONTEXT_HISTORY_META] = runtime_context_meta
             entry.setdefault("timestamp", datetime.now().isoformat())
             session.messages.append(entry)
+            if role == "user":
+                saved_followup_ids.update(followup_id for followup_id in followup_ids if followup_id)
             if role == "assistant":
                 last_assistant_idx = len(session.messages) - 1
                 declared_tool_call_ids.update(
@@ -2177,6 +2228,8 @@ class AgentLoop:
                 )
         if turn_latency_ms is not None and last_assistant_idx is not None:
             session.messages[last_assistant_idx]["latency_ms"] = int(turn_latency_ms)
+        if saved_followup_ids:
+            acknowledge_pending_followups(session, saved_followup_ids)
         session.updated_at = datetime.now()
 
     def _persist_subagent_followup(self, session: Session, msg: InboundMessage) -> bool:

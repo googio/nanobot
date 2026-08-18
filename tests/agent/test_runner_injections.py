@@ -759,6 +759,20 @@ async def test_runner_merges_multiple_injected_user_messages_without_losing_medi
     )
 
 
+def test_runner_merge_keeps_all_recovery_followup_ids() -> None:
+    """Merged follow-ups stay acknowledged together after a later save."""
+    from nanobot.agent.runner import AgentRunner
+    from nanobot.session.recovery import PENDING_FOLLOWUP_ID_KEY
+
+    messages = [{"role": "user", "content": "first", PENDING_FOLLOWUP_ID_KEY: "one"}]
+    AgentRunner._append_injected_messages(
+        messages,
+        [{"role": "user", "content": "second", PENDING_FOLLOWUP_ID_KEY: "two"}],
+    )
+
+    assert messages[-1][PENDING_FOLLOWUP_ID_KEY] == ["one", "two"]
+
+
 def test_runner_merge_preserves_runtime_markers_with_media() -> None:
     from nanobot.agent.runner import AgentRunner
     from nanobot.runtime_context import (

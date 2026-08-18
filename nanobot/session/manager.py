@@ -57,6 +57,7 @@ _PROVIDER_STATE_RECORD_PREFIX_RE = re.compile(
 _FORK_VOLATILE_METADATA_KEYS = {
     "goal_state",
     "pending_user_turn",
+    "pending_user_followups",
     "runtime_checkpoint",
     "webui_recovery",
     "thread_goal",

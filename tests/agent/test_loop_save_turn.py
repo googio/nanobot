@@ -36,6 +36,7 @@ from nanobot.session.keys import (
     UNIFIED_SESSION_KEY,
 )
 from nanobot.session.manager import Session
+from nanobot.session.recovery import PENDING_FOLLOWUP_ID_KEY, PENDING_FOLLOWUPS_KEY
 from nanobot.session.turn_continuation import (
     INTERNAL_CONTINUATION_META,
     INTERNAL_CONTINUATION_RUN_STARTED_AT_META,
@@ -379,6 +380,34 @@ def test_save_turn_keeps_multimodal_runtime_context_for_model_replay() -> None:
         {"type": "text", "text": "provider context"}
     ]
     assert public_history_message(session.messages[0])["content"] == []
+
+
+def test_save_turn_acknowledges_every_merged_recovery_followup() -> None:
+    """Persisting a merged injected row retires every durable follow-up ID."""
+    loop = _mk_loop()
+    session = Session(
+        key="test:recovery-followups",
+        metadata={
+            PENDING_FOLLOWUPS_KEY: [
+                {"id": "first"},
+                {"id": "second"},
+            ]
+        },
+    )
+
+    loop._save_turn(
+        session,
+        [
+            {
+                "role": "user",
+                "content": "first\n\nsecond",
+                PENDING_FOLLOWUP_ID_KEY: ["first", "second"],
+            }
+        ],
+        skip=0,
+    )
+
+    assert PENDING_FOLLOWUPS_KEY not in session.metadata
 
 
 def test_save_turn_keeps_image_placeholder_and_runtime_context() -> None:
