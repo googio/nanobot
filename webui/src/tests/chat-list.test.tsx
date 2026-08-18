@@ -84,6 +84,26 @@ describe("ChatList", () => {
       .toBeInTheDocument();
   });
 
+  it("shows the running indicator while a recovery continuation is active", () => {
+    render(
+      <ChatList
+        sessions={[session({ chatId: "recovery", title: "Interrupted task" })]}
+        runningChatIds={["recovery"]}
+        recoveryChatIds={["recovery"]}
+        activeKey="websocket:other"
+        onSelect={vi.fn()}
+        onRequestDelete={vi.fn()}
+        onTogglePin={vi.fn()}
+        onRequestRename={vi.fn()}
+        onToggleArchive={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("img", { name: "Agent running" })).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "This conversation needs your attention" }))
+      .not.toBeInTheDocument();
+  });
+
   it("keeps tab grouping out of drag protocols while exposing inactive panes as mention sources", () => {
     render(
       <ChatList

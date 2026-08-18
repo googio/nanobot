@@ -899,7 +899,7 @@ export const ChatList = memo(function ChatList({
                       ? relativeTime(s.updatedAt ?? s.createdAt)
                       : "";
                     const activityState = running.has(s.chatId)
-                      ? (recovery.has(s.chatId) ? "recovery" : "running")
+                      ? "running"
                       : recovery.has(s.chatId)
                         ? "recovery"
                         : updated.has(s.chatId) && !topicActive
@@ -1378,7 +1378,7 @@ function ActivePaneRows({
       {panes.map((pane) => {
         const active = tabActive && pane.key === group.activePaneKey;
         const activityState = running.has(pane.chatId)
-          ? (recovery.has(pane.chatId) ? "recovery" : "running")
+          ? "running"
           : recovery.has(pane.chatId)
             ? "recovery"
             : updated.has(pane.chatId) && !active
