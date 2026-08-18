@@ -22,6 +22,7 @@ import type {
   ProviderOAuthCompletionResult,
   ProviderOAuthLoginResult,
   ProviderSettingsUpdate,
+  RecoveryState,
   SessionDeleteResult,
   SessionAutomationsPayload,
   SettingsPayload,
@@ -178,6 +179,7 @@ export async function listSessions(
     preview?: string;
     model_preset?: string | null;
     run_started_at?: number | null;
+    recovery_state?: RecoveryState | null;
     workspace_scope?: WorkspaceScopePayload | null;
   };
   const body = await request<{ sessions: Row[] }>(
@@ -195,6 +197,7 @@ export async function listSessions(
     preview: s.preview ?? "",
     modelPreset: s.model_preset ?? null,
     runStartedAt: s.run_started_at ?? null,
+    recoveryState: s.recovery_state ?? null,
     workspaceScope: s.workspace_scope ?? null,
   }));
 }

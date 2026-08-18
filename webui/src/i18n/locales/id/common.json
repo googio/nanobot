@@ -1001,7 +1001,8 @@
     "activity": {
       "running": "Agen sedang berjalan",
       "complete": "Agen selesai",
-      "updated": "Aktivitas baru"
+      "updated": "Aktivitas baru",
+      "recovery": "Percakapan ini memerlukan perhatian Anda"
     },
     "pin": "Sematkan",
     "unpin": "Lepas sematan",

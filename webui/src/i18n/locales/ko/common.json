@@ -1001,7 +1001,8 @@
     "activity": {
       "running": "에이전트 실행 중",
       "complete": "에이전트 완료",
-      "updated": "새 활동"
+      "updated": "새 활동",
+      "recovery": "이 대화에는 확인이 필요합니다"
     },
     "pin": "고정",
     "unpin": "고정 해제",

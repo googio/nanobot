@@ -1015,7 +1015,8 @@
     "activity": {
       "running": "智能体正在运行",
       "complete": "智能体已完成",
-      "updated": "有新内容"
+      "updated": "有新内容",
+      "recovery": "此对话需要你的处理"
     },
     "pin": "置顶",
     "unpin": "取消置顶",

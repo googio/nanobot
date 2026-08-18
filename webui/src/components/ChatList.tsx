@@ -11,6 +11,7 @@ import type { MouseEvent as ReactMouseEvent, ReactElement } from "react";
 import {
   Archive,
   ArchiveRestore,
+  AlertTriangle,
   ChevronDown,
   Folder,
   FolderTree,
@@ -232,6 +233,7 @@ interface ChatListProps {
   collapsedGroups?: Record<string, boolean>;
   runningChatIds?: string[];
   updatedChatIds?: string[];
+  recoveryChatIds?: string[];
   density?: SidebarDensity;
   showPreviews?: boolean;
   showTimestamps?: boolean;
@@ -274,6 +276,7 @@ export const ChatList = memo(function ChatList({
   collapsedGroups = {},
   runningChatIds = [],
   updatedChatIds = [],
+  recoveryChatIds = [],
   density = "comfortable",
   showPreviews = false,
   showTimestamps = false,
@@ -530,6 +533,7 @@ export const ChatList = memo(function ChatList({
 
   const running = new Set(runningChatIds);
   const updated = new Set(updatedChatIds);
+  const recovery = new Set(recoveryChatIds);
   const compact = density === "compact";
   const firstProjectGroupIndex = limitedGroups.findIndex((group) => group.kind === "project");
   const selectableDeleteKeys = Array.from(new Set(limitedGroups.flatMap((group) => (
@@ -853,6 +857,7 @@ export const ChatList = memo(function ChatList({
                                   compact={compact}
                                   running={running}
                                   updated={updated}
+                                  recovery={recovery}
                                   onSelectPane={onSelectPane}
                                   onRequestDelete={onRequestDelete}
                                   onRequestRename={onRequestRename}
@@ -894,10 +899,12 @@ export const ChatList = memo(function ChatList({
                       ? relativeTime(s.updatedAt ?? s.createdAt)
                       : "";
                     const activityState = running.has(s.chatId)
-                      ? "running"
-                      : updated.has(s.chatId) && !topicActive
-                        ? "updated"
-                        : null;
+                      ? (recovery.has(s.chatId) ? "recovery" : "running")
+                      : recovery.has(s.chatId)
+                        ? "recovery"
+                        : updated.has(s.chatId) && !topicActive
+                          ? "updated"
+                          : null;
                     const hasPaneMoveTarget = Boolean(onAttachPane)
                       && paneGroupTargets.some((target) => (
                         target.key !== paneGroup?.tabKey && !target.atCapacity
@@ -1310,6 +1317,7 @@ function ActivePaneRows({
   compact,
   running,
   updated,
+  recovery,
   onSelectPane,
   onRequestDelete,
   onRequestRename,
@@ -1334,6 +1342,7 @@ function ActivePaneRows({
   compact: boolean;
   running: ReadonlySet<string>;
   updated: ReadonlySet<string>;
+  recovery: ReadonlySet<string>;
   onSelectPane?: (tabKey: string, paneKey: string) => void;
   onRequestDelete: (key: string, label: string) => void;
   onRequestRename: (key: string, label: string) => void;
@@ -1369,10 +1378,12 @@ function ActivePaneRows({
       {panes.map((pane) => {
         const active = tabActive && pane.key === group.activePaneKey;
         const activityState = running.has(pane.chatId)
-          ? "running"
-          : updated.has(pane.chatId) && !active
-            ? "updated"
-            : null;
+          ? (recovery.has(pane.chatId) ? "recovery" : "running")
+          : recovery.has(pane.chatId)
+            ? "recovery"
+            : updated.has(pane.chatId) && !active
+              ? "updated"
+              : null;
         const paneActionsLabel = t("workbench.paneActions", { title: pane.title });
         const selected = selectedDeleteKeys.has(pane.key);
         const isPinned = pinned.has(pane.key);
@@ -1835,9 +1846,26 @@ function ChatsFoldFooter({
 function SessionActivityIndicator({
   state,
 }: {
-  state: "running" | "updated" | null;
+  state: "running" | "updated" | "recovery" | null;
 }) {
   const { t } = useTranslation();
+
+  if (state === "recovery") {
+    const label = t("chat.activity.recovery", {
+      defaultValue: "This conversation needs your attention",
+    });
+    return (
+      <SidebarItemTooltip label={label}>
+        <span
+          role="img"
+          aria-label={label}
+          className="grid h-4 w-4 shrink-0 place-items-center text-[#ff8a3d]"
+        >
+          <AlertTriangle className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />
+        </span>
+      </SidebarItemTooltip>
+    );
+  }
 
   if (state === "running") {
     const label = t("chat.activity.running");

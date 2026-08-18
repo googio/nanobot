@@ -914,6 +914,7 @@ export function useNanobotStream(
           // recovery notice.
           setRunStartedAt(null);
           setIsStreaming(false);
+          client.finishRunLocally(chatId);
           cancelStreamEndTimer();
           clearPendingStreamWork();
           closeActiveAssistantStream();
@@ -937,6 +938,7 @@ export function useNanobotStream(
         } else if (ev.recovery_state) {
           setRunStartedAt(null);
           setIsStreaming(false);
+          client.finishRunLocally(chatId);
           cancelStreamEndTimer();
           clearPendingStreamWork();
           closeActiveAssistantStream();

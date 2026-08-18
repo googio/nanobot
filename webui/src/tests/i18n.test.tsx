@@ -254,6 +254,7 @@ const LOCALIZED_NEW_SURFACE_KEYS = [
   "chat.activity.running",
   "chat.activity.complete",
   "chat.activity.updated",
+  "chat.activity.recovery",
   "chat.pin",
   "chat.unpin",
   "chat.rename",

@@ -1015,7 +1015,8 @@
     "activity": {
       "running": "Agente em execução",
       "complete": "Agente finalizado",
-      "updated": "Nova atividade"
+      "updated": "Nova atividade",
+      "recovery": "Esta conversa precisa da sua atenção"
     },
     "pin": "Fixar",
     "unpin": "Desafixar",

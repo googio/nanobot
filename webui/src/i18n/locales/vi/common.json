@@ -1001,7 +1001,8 @@
     "activity": {
       "running": "Tác nhân đang chạy",
       "complete": "Tác nhân đã hoàn tất",
-      "updated": "Hoạt động mới"
+      "updated": "Hoạt động mới",
+      "recovery": "Cuộc trò chuyện này cần bạn xử lý"
     },
     "pin": "Ghim",
     "unpin": "Bỏ ghim",

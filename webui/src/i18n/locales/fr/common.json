@@ -1001,7 +1001,8 @@
     "activity": {
       "running": "Agent en cours",
       "complete": "Agent terminé",
-      "updated": "Nouvelle activité"
+      "updated": "Nouvelle activité",
+      "recovery": "Cette conversation nécessite votre attention"
     },
     "pin": "Épingler",
     "unpin": "Désépingler",

@@ -66,6 +66,24 @@ describe("ChatList", () => {
     expect(onTogglePin).toHaveBeenCalledWith("websocket:review");
   });
 
+  it("marks a conversation that needs recovery attention with a warning indicator", () => {
+    render(
+      <ChatList
+        sessions={[session({ chatId: "recovery", title: "Interrupted task" })]}
+        recoveryChatIds={["recovery"]}
+        activeKey="websocket:other"
+        onSelect={vi.fn()}
+        onRequestDelete={vi.fn()}
+        onTogglePin={vi.fn()}
+        onRequestRename={vi.fn()}
+        onToggleArchive={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("img", { name: "This conversation needs your attention" }))
+      .toBeInTheDocument();
+  });
+
   it("keeps tab grouping out of drag protocols while exposing inactive panes as mention sources", () => {
     render(
       <ChatList

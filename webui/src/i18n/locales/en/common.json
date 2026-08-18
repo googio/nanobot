@@ -1015,7 +1015,8 @@
     "activity": {
       "running": "Agent running",
       "complete": "Agent finished",
-      "updated": "New activity"
+      "updated": "New activity",
+      "recovery": "This conversation needs your attention"
     },
     "pin": "Pin",
     "unpin": "Unpin",

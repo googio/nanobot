@@ -433,6 +433,7 @@ describe("useNanobotStream", () => {
     });
     expect(result.current.isStreaming).toBe(false);
     expect(result.current.runStartedAt).toBeNull();
+    expect(fake.client.finishRunLocally).toHaveBeenCalledWith("chat-recovery");
 
     await act(async () => result.current.continueRecovery());
     expect(fake.requestMutation).toHaveBeenCalledWith("recovery.continue", {
@@ -449,6 +450,7 @@ describe("useNanobotStream", () => {
       });
     });
     expect(result.current.isStreaming).toBe(false);
+    expect(fake.client.finishRunLocally).toHaveBeenCalledWith("chat-recovery");
   });
 
   it("preserves proactive automation source metadata on complete assistant messages", () => {

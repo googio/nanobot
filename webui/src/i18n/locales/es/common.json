@@ -1002,7 +1002,8 @@
     "activity": {
       "running": "Agente en ejecución",
       "complete": "Agente terminado",
-      "updated": "Nueva actividad"
+      "updated": "Nueva actividad",
+      "recovery": "Esta conversación requiere tu atención"
     },
     "pin": "Fijar",
     "unpin": "Desfijar",

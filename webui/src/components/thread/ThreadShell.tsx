@@ -812,9 +812,16 @@ export function ThreadShell({
   }, []);
 
   const displayMessages = useMemo(() => projectWebuiThreadMessages(messages), [messages]);
-  const currentRunStartedAt = messagesReady ? runStartedAt : null;
   const currentGoalState = messagesReady ? goalState : undefined;
-  const turnActive = messagesReady && (isStreaming || currentRunStartedAt !== null);
+  // A persisted recovery state is the source of truth after a restart. The
+  // interrupted turn must stay visible for audit, but it is no longer active:
+  // freeze the clock, stop the composer, and let the recovery notice own the
+  // next action. Only an explicit ``resuming`` state is an active turn.
+  const recoveryIsTerminal = recoveryState !== null && recoveryState.status !== "resuming";
+  const currentRunStartedAt = messagesReady && !recoveryIsTerminal ? runStartedAt : null;
+  const turnActive = messagesReady
+    && !recoveryIsTerminal
+    && (isStreaming || currentRunStartedAt !== null);
   const restoredViewportTurnId = useMemo(
     () => turnActive ? latestActiveTurnId(displayMessages, currentRunStartedAt) : null,
     [currentRunStartedAt, displayMessages, turnActive],
