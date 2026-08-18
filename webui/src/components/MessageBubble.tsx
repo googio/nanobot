@@ -225,14 +225,14 @@ function TurnUsageMeta({
       ? ` / ${compactTokenCount(contextWindowTokens)}`
       : "";
     details.push(t("message.usage.context", {
-      defaultValue: "Latest context: {{tokens}}{{capacity}} tokens",
+      defaultValue: "Context now: {{tokens}}{{capacity}}",
       tokens: compactTokenCount(usage.context_tokens),
       capacity,
     }));
   }
   if (typeof usage.request_count === "number") {
     details.push(t("message.usage.requests", {
-      defaultValue: "{{count}} model requests",
+      defaultValue: "{{count}} calls this turn",
       count: usage.request_count,
     }));
   }

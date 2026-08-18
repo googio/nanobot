@@ -1012,8 +1012,8 @@ describe("MessageBubble", () => {
     const usage = screen.getByText("12.4K in · 823 out · 78% cached · 18s");
     expect(usage).toHaveAttribute("data-turn-usage");
     fireEvent.focus(usage);
-    expect(screen.getByRole("tooltip")).toHaveTextContent("Latest context: 8.1K / 128K tokens");
-    expect(screen.getByRole("tooltip")).toHaveTextContent("3 model requests");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Context now: 8.1K / 128K");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("3 calls this turn");
   });
 
   it("marks estimated usage and omits cache when the provider did not report it", () => {

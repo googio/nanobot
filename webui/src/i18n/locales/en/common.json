@@ -1428,8 +1428,8 @@
     "fileEditOpenFile": "Open file",
     "fileEditDiffTruncated": "Diff truncated. Open the file for the full change.",
     "usage": {
-      "context": "Latest context: {{tokens}}{{capacity}} tokens",
-      "requests": "{{count}} model requests",
+      "context": "Context now: {{tokens}}{{capacity}}",
+      "requests": "{{count}} calls this turn",
       "estimated": "Includes estimated usage"
     }
   },

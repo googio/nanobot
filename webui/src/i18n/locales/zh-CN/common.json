@@ -1428,8 +1428,8 @@
     "fileEditOpenFile": "打开文件",
     "fileEditDiffTruncated": "差异内容已截断。打开文件可查看完整更改。",
     "usage": {
-      "context": "最近一次上下文：{{tokens}}{{capacity}} tokens",
-      "requests": "{{count}} 次模型请求",
+      "context": "当前上下文：{{tokens}}{{capacity}}",
+      "requests": "本轮 {{count}} 次模型调用",
       "estimated": "包含估算用量"
     }
   },
