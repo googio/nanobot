@@ -499,6 +499,26 @@ class RecoveryCoordinator:
                     )
                 self.sessions.save(session)
                 await self._publish(chat_id, next_state)
+            elif self._has_unfinished_webui_transcript(session):
+                # A normal last-client shutdown can materialize the checkpoint
+                # before the process exits.  In that path there is no pending
+                # marker left to classify, but the append-only transcript still
+                # contains an activity row without a turn_end.  Treat it as an
+                # interrupted turn instead of letting the UI resurrect it as a
+                # forever-running spinner.
+                waiting = self._set_state(
+                    session,
+                    status="awaiting_user",
+                    recovery_id=uuid4().hex,
+                    attempts=0,
+                    reason="interrupted_without_checkpoint",
+                    message=(
+                        "The task was interrupted before completion. "
+                        "Review it before continuing; tools will not be replayed automatically."
+                    ),
+                )
+                self.sessions.save(session)
+                await self._publish(chat_id, waiting, session_updated=True)
             return
         if state and state["status"] in {"awaiting_user", "failed"}:
             await self._publish(chat_id, state)
@@ -688,6 +708,24 @@ class RecoveryCoordinator:
 
     def _session_key(self, chat_id: str) -> str:
         return UNIFIED_SESSION_KEY if self.unified_session else f"websocket:{chat_id}"
+
+    @staticmethod
+    def _has_unfinished_webui_transcript(session: Session) -> bool:
+        """Detect a stale WebUI activity tail after an unclean gateway stop.
+
+        The transcript is intentionally consulted only as a last-resort signal:
+        a durable pending turn or runtime checkpoint always takes precedence.
+        This keeps browser disconnects harmless while preventing a materialized
+        partial turn from being presented as active forever after a restart.
+        """
+        try:
+            from nanobot.webui.transcript import has_pending_tool_calls, read_transcript_lines
+
+            return has_pending_tool_calls(read_transcript_lines(session.key))
+        except (OSError, ValueError, TypeError):
+            # Recovery must fail closed if the optional display transcript is
+            # corrupt or unavailable; the normal checkpoint path still applies.
+            return False
 
     @staticmethod
     def _websocket_route(session: Session) -> tuple[str, str] | None:

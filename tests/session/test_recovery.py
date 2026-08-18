@@ -54,6 +54,32 @@ async def test_restart_before_model_call_auto_continues_once(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
+async def test_stale_incomplete_transcript_waits_for_confirmation(tmp_path: Path, monkeypatch) -> None:
+    """A materialized shutdown must not reappear as an endless Working state."""
+    sessions = SessionManager(tmp_path)
+    session = sessions.get_or_create("websocket:chat")
+    _persist(sessions, session)
+    monkeypatch.setattr(
+        "nanobot.webui.transcript.read_transcript_lines",
+        lambda _key: [
+            {"event": "user", "text": "run the task"},
+            {"event": "message", "kind": "tool_hint", "text": "shell running"},
+        ],
+    )
+
+    coordinator, bus, restarted = _coordinator(tmp_path)
+    await coordinator.scan()
+
+    assert bus.inbound.empty()
+    state = restarted.get_or_create("websocket:chat").metadata[RECOVERY_METADATA_KEY]
+    assert state["status"] == "awaiting_user"
+    assert state["reason"] == "interrupted_without_checkpoint"
+    event = bus.outbound.get_nowait().event
+    assert isinstance(event, RecoveryStateEvent)
+    assert event.status == "awaiting_user"
+
+
+@pytest.mark.asyncio
 async def test_live_turn_followup_survives_restart_until_it_is_committed(tmp_path: Path) -> None:
     """A message injected mid-turn is not lost between checkpoints."""
     sessions = SessionManager(tmp_path)
