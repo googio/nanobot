@@ -161,11 +161,19 @@
     pointer-events: none;
     background-color: rgb(236 141 49);
     opacity: 0;
-    transition: opacity 220ms ease-out;
+    transition: opacity 180ms ease-out;
+  }
+
+  .composer-model-badge[data-fallback="true"] {
+    border-color: rgb(236 141 49 / 0.38);
   }
 
   .composer-model-badge[data-fallback="true"]::before {
-    opacity: 1;
+    opacity: 0.1;
+  }
+
+  .dark .composer-model-badge[data-fallback="true"]::before {
+    opacity: 0.15;
   }
 
   .composer-model-badge > * {
