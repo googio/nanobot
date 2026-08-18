@@ -613,6 +613,31 @@ describe("ThreadShell", () => {
     expect(screen.queryByTitle("Default · deepseek-v4-pro · DeepSeek")).not.toBeInTheDocument();
   });
 
+  it("falls back to the current preset while a renamed session reference is stale", async () => {
+    const client = makeClient();
+    const settings = settingsWithFastPreset();
+    settings.agent.model_preset = "fast";
+    settings.model_presets = settings.model_presets.map((preset) => ({
+      ...preset,
+      active: preset.name === "fast",
+    }));
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={session("renamed-preset", "old-fast")}
+          title="Renamed preset"
+          onToggleSidebar={() => {}}
+          settingsSnapshot={settings}
+        />,
+        "openai-codex/gpt-5.5",
+      ),
+    );
+
+    expect(await screen.findByTitle("fast · gpt-5.5 · OpenAI Codex")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Model not configured" })).not.toBeInTheDocument();
+  });
+
   it("switches through every named preset while preserving call-order priority", async () => {
     const client = makeClient();
     const settings = settingsWithFastPreset();

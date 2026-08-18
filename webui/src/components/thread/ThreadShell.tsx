@@ -898,9 +898,17 @@ export function ThreadShell({
   useEffect(() => {
     setLocalModelPreset(null);
   }, [session?.key, sessionModelPreset]);
+  const configuredPresetNames = useMemo(
+    () => new Set(settings?.model_presets.map((preset) => preset.name) ?? []),
+    [settings],
+  );
   const activeModelPreset = (
-    localModelPreset
-    || sessionModelPreset
+    (localModelPreset && (!settings || configuredPresetNames.has(localModelPreset))
+      ? localModelPreset
+      : null)
+    || (sessionModelPreset && (!settings || configuredPresetNames.has(sessionModelPreset))
+      ? sessionModelPreset
+      : null)
     || settings?.agent.model_preset
     || "default"
   );
