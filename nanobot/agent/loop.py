@@ -1292,7 +1292,7 @@ class AgentLoop:
                         break
                 if deferred:
                     continue
-                # A newer WebUI message must supersede an automatic recovery
+                # A newer WebUI message must supersede an explicit recovery
                 # before it is injected into that recovery's pending queue.
                 # Without this admission point, a recovered turn could finish
                 # first and only then observe the user's newer request.

@@ -39,7 +39,6 @@ PROVIDER_STATE_CHECKPOINT_VERSION_KEY = "provider_state_checkpoint_version"
 PROVIDER_STATE_CHECKPOINT_VERSION = "v1"
 
 _RECOVERY_STATUSES = frozenset({"resuming", "awaiting_user", "recovered", "failed"})
-_AUTO_CONTINUE_PHASES = frozenset({"tools_completed"})
 _UNCERTAIN_TOOL_PHASES = frozenset({"awaiting_tools"})
 _KNOWN_CHECKPOINT_PHASES = frozenset(
     {"final_response", "tools_completed", "awaiting_tools", "error"}
@@ -55,7 +54,7 @@ class RecoveryActionError(ValueError):
 
 
 class RecoveryAdmission(Protocol):
-    """Narrow AgentLoop boundary for queued recovery validation."""
+    """Narrow AgentLoop boundary for explicit recovery validation."""
 
     async def admit(self, message: InboundMessage) -> bool: ...
 
@@ -321,7 +320,7 @@ class RecoveryCoordinator:
     )
 
     def register_recovery_task(self, session_key: str, task: asyncio.Task[Any]) -> None:
-        """Track the task that owns an automatic recovery continuation."""
+        """Track the task that owns an explicit recovery continuation."""
         self._active_recovery_tasks[session_key] = task
 
     def unregister_recovery_task(self, session_key: str, task: asyncio.Task[Any]) -> None:
@@ -330,7 +329,7 @@ class RecoveryCoordinator:
             self._active_recovery_tasks.pop(session_key, None)
 
     async def _cancel_active_recovery(self, session_key: str) -> None:
-        """Stop an automatic continuation before accepting newer user input."""
+        """Stop an explicit continuation before accepting newer user input."""
         task = self._active_recovery_tasks.get(session_key)
         if task is None or task is asyncio.current_task() or task.done():
             return
@@ -362,7 +361,7 @@ class RecoveryCoordinator:
                     recovery_id=recovery_id,
                     attempts=self._recovery_attempts(session),
                     reason="recovery_failed",
-                    message="The interrupted task could not be recovered automatically.",
+                    message="The interrupted task could not be recovered safely.",
                 )
                 self.sessions.save(session)
                 await self._publish(route[1], failed)
@@ -580,20 +579,30 @@ class RecoveryCoordinator:
             self.sessions.save(session)
             await self._publish(chat_id, waiting, session_updated=True)
             return
-        if phase in _AUTO_CONTINUE_PHASES:
-            restore_runtime_checkpoint(session)
-        resuming = self._set_state(
+        # A gateway restart is a lifecycle boundary.  Never enqueue model work
+        # implicitly: even a synchronized checkpoint may sit next to an
+        # external side effect that the user should review first.  The final
+        # answer path above only restores persisted output; it never executes.
+        restore_runtime_checkpoint(session)
+        waiting = self._set_state(
             session,
-            status="resuming",
+            status="awaiting_user",
             recovery_id=recovery_id,
-            attempts=1,
-            reason="restart",
-            message="Continuing the interrupted task from saved context.",
-            resume_message_count=len(session.messages),
+            attempts=0,
+            reason=(
+                "tool_state_unknown"
+                if phase in _UNCERTAIN_TOOL_PHASES or pending_calls
+                else "restart_requires_confirmation"
+            ),
+            message=(
+                "A tool may have been interrupted. Review it before continuing; "
+                "tools will not be replayed automatically."
+                if phase in _UNCERTAIN_TOOL_PHASES or pending_calls
+                else "The task was interrupted by a gateway restart. Review it before continuing."
+            ),
         )
         self.sessions.save(session)
-        await self._publish(chat_id, resuming)
-        await self._queue_continuation(session, chat_id, resuming)
+        await self._publish(chat_id, waiting, session_updated=True)
 
     async def _queue_continuation(
         self,
