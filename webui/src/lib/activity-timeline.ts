@@ -108,7 +108,7 @@ export function normalizeActivityTimeline(
     }
 
     flushActivityMessages();
-    units.push(...normalizeCompletedTurnUnits(turnUnits, flushOptions));
+    units.push(...normalizeCompletedTurnUnits(consolidateAssistantAnswers(turnUnits), flushOptions));
     turnMessages = [];
     activeTurnId = undefined;
     activeTurnStartedAtMs = undefined;
@@ -134,6 +134,55 @@ export function normalizeActivityTimeline(
 
   flushTurn(options);
   return units;
+}
+
+/** Keep one visible assistant answer per user turn.
+ *
+ * Providers may emit text before and after tool calls.  The protocol keeps
+ * those segments separate for auditability, while the conversation view
+ * projects them into one answer so timestamps and actions are not repeated.
+ */
+function consolidateAssistantAnswers(turnUnits: TurnUnit[]): TurnUnit[] {
+  const answerIndices: number[] = [];
+  for (let index = 0; index < turnUnits.length; index += 1) {
+    const unit = turnUnits[index];
+    if (unit.type === "message" && unit.message.role === "assistant") {
+      answerIndices.push(index);
+    }
+  }
+  if (answerIndices.length < 2) return turnUnits;
+
+  const answers = answerIndices.map((index) => {
+    const unit = turnUnits[index];
+    return unit.type === "message" ? unit.message : null;
+  }).filter((message): message is UIMessage => message !== null);
+  const first = answers[0];
+  const last = answers[answers.length - 1];
+  const content = answers
+    .map((message) => message.content.trim())
+    .filter(Boolean)
+    .join("\n\n");
+  const media = answers.flatMap((message) => message.media ?? []);
+  const images = answers.flatMap((message) => message.images ?? []);
+  const merged: UIMessage = {
+    ...first,
+    ...last,
+    id: first.id,
+    content,
+    createdAt: first.createdAt,
+    isStreaming: answers.some((message) => message.isStreaming),
+  };
+  if (media.length) merged.media = media;
+  else delete merged.media;
+  if (images.length) merged.images = images;
+  else delete merged.images;
+
+  const insertAt = answerIndices[answerIndices.length - 1];
+  const answerIndexSet = new Set(answerIndices);
+  return turnUnits.flatMap((unit, index) => {
+    if (index === insertAt) return [{ type: "message", message: merged } as TurnUnit];
+    return answerIndexSet.has(index) ? [] : [unit];
+  });
 }
 
 function orderMessagesByTurnSeq(messages: UIMessage[]): UIMessage[] {

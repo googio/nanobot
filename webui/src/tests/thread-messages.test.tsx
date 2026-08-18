@@ -320,7 +320,6 @@ describe("ThreadMessages", () => {
     expect(unitKeysForDisplay(liveUnits)).toEqual([
       "turn-turn-1-user",
       "turn-turn-1-answer-1",
-      "turn-turn-1-answer-2",
     ]);
   });
 
@@ -1018,7 +1017,7 @@ describe("ThreadMessages", () => {
     expect(screen.queryByText("Worked for 0s")).not.toBeInTheDocument();
   });
 
-  it("shows copy on every assistant slice while keeping fork on the last slice", () => {
+  it("projects assistant slices into one answer with one action set", () => {
     const messages: UIMessage[] = [
       {
         id: "early",
@@ -1050,8 +1049,9 @@ describe("ThreadMessages", () => {
       />,
     );
 
-    expect(screen.getAllByRole("button", { name: "Copy" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "Copy" })).toHaveLength(1);
     expect(screen.getAllByRole("button", { name: "Fork" })).toHaveLength(1);
+    expect(screen.getByText("starting…")).toBeInTheDocument();
     expect(screen.getByText("final reply")).toBeInTheDocument();
   });
 
@@ -1095,7 +1095,7 @@ describe("ThreadMessages", () => {
 
     rerender(<ThreadMessages {...props} isStreaming={false} activeTurnId={null} />);
 
-    expect(container.querySelectorAll('[data-assistant-footer] [aria-label="Copy"]')).toHaveLength(3);
+    expect(container.querySelectorAll('[data-assistant-footer] [aria-label="Copy"]')).toHaveLength(2);
     expect(container.querySelectorAll('[data-assistant-footer] [aria-label="Fork"]')).toHaveLength(2);
   });
 
@@ -1192,13 +1192,15 @@ describe("ThreadMessages", () => {
       .toHaveLength(1);
   });
 
-  it("shows copy on adjacent assistant text slices", () => {
+  it("projects adjacent assistant text slices into one answer", () => {
     const messages: UIMessage[] = [
       { id: "a1", role: "assistant", content: "part one", createdAt: 1 },
       { id: "a2", role: "assistant", content: "part two", createdAt: 2 },
     ];
     render(<ThreadMessages messages={messages} isStreaming={false} />);
-    expect(screen.getAllByRole("button", { name: "Copy" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "Copy" })).toHaveLength(1);
+    expect(screen.getByText("part one")).toBeInTheDocument();
+    expect(screen.getByText("part two")).toBeInTheDocument();
   });
 
   it("does not count failed optimistic messages in assistant fork indices", () => {
@@ -1280,8 +1282,7 @@ describe("ThreadMessages", () => {
       .filter(Boolean);
 
     expect(assistantFlags).toEqual([
-      ["a1", false],
-      ["a2", true],
+      ["a1", true],
       ["a3", true],
     ]);
   });

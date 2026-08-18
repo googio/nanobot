@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { FilePreviewAvailabilityProvider } from "@/components/FilePreviewAvailabilityContext";
 import { FilePreviewPanel } from "@/components/FilePreviewPanel";
 import { PromptNavigator } from "@/components/thread/PromptNavigator";
+import { RecoveryNotice } from "@/components/thread/RecoveryNotice";
 import { SessionInfoPopover } from "@/components/thread/SessionInfoPopover";
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import type { ModelPresetOption } from "@/components/thread/ModelPresetBadge";
@@ -741,6 +742,9 @@ export function ThreadShell({
     isStreaming,
     runStartedAt,
     goalState,
+    recoveryState,
+    continueRecovery,
+    dismissRecovery,
     send,
     transcribeAudio,
     stop,
@@ -1438,6 +1442,13 @@ export function ThreadShell({
 
   const composer = (
     <>
+      {recoveryState ? (
+        <RecoveryNotice
+          state={recoveryState}
+          onContinue={continueRecovery}
+          onDismiss={dismissRecovery}
+        />
+      ) : null}
       {streamError && !hasInlineDeliveryError(messages, streamError) ? (
         <StreamErrorNotice
           error={streamError}

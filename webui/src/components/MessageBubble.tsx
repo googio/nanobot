@@ -48,6 +48,7 @@ import type {
   UIMessage,
   MessageDeliveryErrorKind,
   MessageDeliveryStatus,
+  TurnUsage,
 } from "@/lib/types";
 
 interface MessageBubbleProps {
@@ -170,6 +171,88 @@ function MessageCopyButton({ content }: { content: string }) {
         </button>
       </TooltipTrigger>
       <TooltipContent side="top" align="center">{label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+function compactTokenCount(value: number): string {
+  if (value < 1_000) return Math.round(value).toLocaleString();
+  if (value < 1_000_000) {
+    const digits = value < 100_000 ? 1 : 0;
+    return `${Number((value / 1_000).toFixed(digits))}K`;
+  }
+  const digits = value < 100_000_000 ? 1 : 0;
+  return `${Number((value / 1_000_000).toFixed(digits))}M`;
+}
+
+function compactDuration(milliseconds: number): string {
+  const seconds = milliseconds / 1_000;
+  if (seconds < 10) return `${seconds.toFixed(1)}s`;
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${Math.round(seconds % 60)}s`;
+}
+
+function TurnUsageMeta({
+  usage,
+  latencyMs,
+  contextWindowTokens,
+}: {
+  usage: TurnUsage;
+  latencyMs?: number;
+  contextWindowTokens?: number;
+}) {
+  const { t } = useTranslation();
+  const prompt = usage.prompt_tokens;
+  const completion = usage.completion_tokens;
+  const approximate = (usage.estimated_tokens ?? 0) > 0 ? "~" : "";
+  const parts: string[] = [];
+  if (typeof prompt === "number") parts.push(`${approximate}${compactTokenCount(prompt)} in`);
+  if (typeof completion === "number") parts.push(`${approximate}${compactTokenCount(completion)} out`);
+  if (
+    typeof usage.cached_tokens === "number"
+    && typeof prompt === "number"
+    && prompt > 0
+  ) {
+    parts.push(`${Math.round(Math.min(1, usage.cached_tokens / prompt) * 100)}% cached`);
+  }
+  if (typeof latencyMs === "number" && latencyMs >= 0) parts.push(compactDuration(latencyMs));
+  if (parts.length === 0) return null;
+
+  const details: string[] = [];
+  if (typeof usage.context_tokens === "number") {
+    const capacity = typeof contextWindowTokens === "number"
+      ? ` / ${compactTokenCount(contextWindowTokens)}`
+      : "";
+    details.push(t("message.usage.context", {
+      defaultValue: "Latest context: {{tokens}}{{capacity}} tokens",
+      tokens: compactTokenCount(usage.context_tokens),
+      capacity,
+    }));
+  }
+  if (typeof usage.request_count === "number") {
+    details.push(t("message.usage.requests", {
+      defaultValue: "{{count}} model requests",
+      count: usage.request_count,
+    }));
+  }
+  if (approximate) {
+    details.push(t("message.usage.estimated", { defaultValue: "Includes estimated usage" }));
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          data-turn-usage
+          tabIndex={details.length ? 0 : undefined}
+          className="cursor-help text-[11px] leading-none text-muted-foreground/70 tabular-nums"
+        >
+          {parts.join(" · ")}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top" align="start" className="max-w-72">
+        {details.length ? details.join(" · ") : parts.join(" · ")}
+      </TooltipContent>
     </Tooltip>
   );
 }
@@ -410,7 +493,9 @@ export function MessageBubble({
     && (!empty || hasReasoning || media.length > 0);
   const assistantTimestampTitle = showAssistantTimestamp ? fmtDateTime(assistantTimestamp) : "";
   const showAutomationTrigger = showAssistantTimestamp && automationSourceLabel.length > 0;
-  const showAssistantFooterRow = showCopyButton || showForkButton || showAssistantTimestamp;
+  const showUsage = message.role === "assistant" && !!message.usage && !message.isStreaming;
+  const showAssistantFooterRow =
+    showCopyButton || showForkButton || showAssistantTimestamp || showUsage;
   const showAssistantFooterSlot =
     message.role === "assistant"
     && (!empty || hasReasoning || media.length > 0);
@@ -475,6 +560,13 @@ export function MessageBubble({
                 </TooltipTrigger>
                 <TooltipContent side="top" align="center">{forkLabel}</TooltipContent>
               </Tooltip>
+            ) : null}
+            {showUsage ? (
+              <TurnUsageMeta
+                usage={message.usage!}
+                latencyMs={message.latencyMs}
+                contextWindowTokens={message.contextWindowTokens}
+              />
             ) : null}
             {showAssistantTimestamp ? (
               <MessageTimestamp

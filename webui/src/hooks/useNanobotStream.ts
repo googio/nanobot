@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { useClient } from "@/providers/ClientProvider";
 import { toMediaAttachment } from "@/lib/media";
@@ -28,6 +29,7 @@ import {
 } from "@/lib/thread-event-projection";
 import type { UIMessageTurnFields } from "@/lib/thread-event-projection";
 import { formatQuotedUserMessage } from "@/lib/user-message-quote";
+import { readLocalPreferences } from "@/lib/local-preferences";
 import type {
   InboundEvent,
   OutboundCliAppMention,
@@ -36,6 +38,7 @@ import type {
   SessionMention,
   GoalStateWsPayload,
   MessageDeliveryStatus,
+  RecoveryState,
   UIMediaAttachment,
   UIMessage,
   WorkspaceScopePayload,
@@ -232,6 +235,9 @@ export function useNanobotStream(
   runStartedAt: number | null;
   /** Latest sustained goal for this ``chatId`` (``goal_state`` WS events). */
   goalState: GoalStateWsPayload | undefined;
+  recoveryState: RecoveryState | null;
+  continueRecovery: () => Promise<void>;
+  dismissRecovery: () => Promise<void>;
   send: (
     content: string,
     images?: SendAttachment[],
@@ -250,6 +256,7 @@ export function useNanobotStream(
   dismissStreamError: () => void;
 } {
   const { client } = useClient();
+  const { t } = useTranslation();
   const initialRunStartedAt = chatId ? client.getRunStartedAt(chatId) : null;
   const [messages, setMessages] = useState<UIMessage[]>(initialMessages);
   const [messageOwnerChatId, setMessageOwnerChatId] = useState(chatId);
@@ -261,6 +268,7 @@ export function useNanobotStream(
   /** Unix epoch seconds when the current user turn started; cleared on ``idle``. */
   const [runStartedAt, setRunStartedAt] = useState<number | null>(initialRunStartedAt);
   const [goalState, setGoalState] = useState<GoalStateWsPayload | undefined>(undefined);
+  const [recoveryState, setRecoveryState] = useState<RecoveryState | null>(null);
   const [streamError, setStreamError] = useState<StreamError | null>(null);
   const buffer = useRef<StreamBuffer | null>(null);
   const activeAssistantRef = useRef<ActiveAssistantCursor | null>(null);
@@ -283,6 +291,16 @@ export function useNanobotStream(
   const streamEndTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const dismissStreamError = useCallback(() => setStreamError(null), []);
+
+  const notifyInBackground = useCallback((body: string) => {
+    if (
+      typeof Notification === "undefined"
+      || Notification.permission !== "granted"
+      || document.visibilityState === "visible"
+      || !readLocalPreferences().browserNotifications
+    ) return;
+    new Notification("nanobot", { body });
+  }, []);
 
   const clearPendingStreamWork = useCallback(() => {
     if (streamFrameRef.current !== null) {
@@ -660,6 +678,7 @@ export function useNanobotStream(
     setStreamError(null);
     setRunStartedAt(restoredRunStartedAt);
     setGoalState(chatId ? client.getGoalState(chatId) : undefined);
+    setRecoveryState(null);
     buffer.current = null;
     activeAssistantRef.current = null;
     closedAssistantStreamIdsRef.current.clear();
@@ -851,6 +870,10 @@ export function useNanobotStream(
             finalized,
             {
               ...(latencyMs !== undefined ? { latencyMs } : {}),
+              ...(ev.usage ? { usage: ev.usage } : {}),
+              ...(typeof ev.context_window_tokens === "number"
+                ? { contextWindowTokens: ev.context_window_tokens }
+                : {}),
               completedAt,
             },
             ev.turn_id,
@@ -862,7 +885,45 @@ export function useNanobotStream(
           return finalized;
         });
         suppressStreamUntilTurnEndRef.current = false;
+        notifyInBackground(t("recovery.completed", { defaultValue: "Task completed" }));
         onTurnEnd?.();
+        return;
+      }
+
+      if (ev.event === "recovery_state") {
+        const next: RecoveryState = {
+          status: ev.status,
+          recovery_id: ev.recovery_id,
+          ...(ev.reason ? { reason: ev.reason } : {}),
+          ...(ev.message ? { message: ev.message } : {}),
+          ...(typeof ev.attempts === "number" ? { attempts: ev.attempts } : {}),
+        };
+        setRecoveryState(next);
+        if (ev.status === "resuming") setIsStreaming(true);
+        if (
+          ev.status === "awaiting_user"
+          || ev.status === "recovered"
+          || ev.status === "failed"
+        ) {
+          setIsStreaming(false);
+          if (ev.status !== "recovered") {
+            notifyInBackground(
+              ev.status === "failed"
+                ? t("recovery.failed", { defaultValue: "Task recovery failed" })
+                : t("recovery.interrupted", { defaultValue: "Task interrupted" }),
+            );
+          }
+        }
+        return;
+      }
+
+      if (ev.event === "attached") {
+        setRecoveryState(ev.recovery_state ?? null);
+        if (ev.recovery_state?.status === "resuming") {
+          setIsStreaming(true);
+        } else if (ev.recovery_state) {
+          setIsStreaming(false);
+        }
         return;
       }
 
@@ -1055,7 +1116,6 @@ export function useNanobotStream(
         });
         return;
       }
-      // ``attached`` frames aren't actionable here.
     };
 
     const unsub = client.onChat(chatId, handle);
@@ -1079,9 +1139,11 @@ export function useNanobotStream(
     ensureActivitySegmentId,
     flushPendingStreamEvents,
     isSideChannelEvent,
+    notifyInBackground,
     onTurnEnd,
     schedulePendingStreamFlush,
     scheduleStreamEndTimer,
+    t,
   ]);
 
   const send = useCallback(
@@ -1193,12 +1255,32 @@ export function useNanobotStream(
     [client],
   );
 
+  const recoveryAction = useCallback(async (action: "continue" | "dismiss") => {
+    if (!chatId || !recoveryState) return;
+    await client.requestMutation(`recovery.${action}`, {
+      chat_id: chatId,
+      recovery_id: recoveryState.recovery_id,
+    });
+  }, [chatId, client, recoveryState]);
+
+  const continueRecovery = useCallback(
+    () => recoveryAction("continue"),
+    [recoveryAction],
+  );
+  const dismissRecovery = useCallback(
+    () => recoveryAction("dismiss"),
+    [recoveryAction],
+  );
+
   return {
     messages,
     messagesReady: messageOwnerChatId === chatId,
     isStreaming,
     runStartedAt,
     goalState,
+    recoveryState,
+    continueRecovery,
+    dismissRecovery,
     send,
     transcribeAudio,
     stop,

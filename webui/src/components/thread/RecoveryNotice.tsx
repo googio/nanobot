@@ -1,0 +1,85 @@
+import { useState } from "react";
+import { AlertTriangle, LoaderCircle, RotateCcw, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
+
+import { Button } from "@/components/ui/button";
+import type { RecoveryState } from "@/lib/types";
+
+interface RecoveryNoticeProps {
+  state: RecoveryState;
+  onContinue: () => Promise<void>;
+  onDismiss: () => Promise<void>;
+}
+
+export function RecoveryNotice({ state, onContinue, onDismiss }: RecoveryNoticeProps) {
+  const { t } = useTranslation();
+  const [pending, setPending] = useState<"continue" | "dismiss" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  if (state.status === "recovered") return null;
+
+  const waiting = state.status === "awaiting_user" || state.status === "failed";
+  const title = state.status === "failed"
+    ? t("recovery.failed", { defaultValue: "Task recovery failed" })
+    : waiting
+      ? t("recovery.interrupted", { defaultValue: "Task interrupted" })
+      : t("recovery.resuming", { defaultValue: "Restoring interrupted task…" });
+  const detail = state.status === "failed"
+    ? t("recovery.failedHelp", {
+        defaultValue: "The saved task could not be restored safely. Review it before continuing.",
+      })
+    : waiting
+      ? t("recovery.review", { defaultValue: "Review the task before continuing. Tools will not be replayed automatically." })
+      : t("recovery.safeResume", { defaultValue: "Continuing from saved conversation context." });
+  const run = (action: "continue" | "dismiss") => {
+    setPending(action);
+    setError(null);
+    const operation = action === "continue" ? onContinue() : onDismiss();
+    void operation.catch(() => {
+      setError(t("recovery.actionFailed", { defaultValue: "Recovery action failed. Try again." }));
+    }).finally(() => setPending(null));
+  };
+
+  return (
+    <div
+      role={waiting ? "alert" : "status"}
+      className="mb-2 flex items-center gap-3 rounded-control border border-border/70 bg-muted/35 px-3 py-2 text-sm"
+    >
+      {waiting ? (
+        <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden />
+      ) : (
+        <LoaderCircle className="h-4 w-4 shrink-0 animate-spin text-primary motion-reduce:animate-none" aria-hidden />
+      )}
+      <div className="min-w-0 flex-1">
+        <p className="font-medium">
+          {title}
+        </p>
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          {error ?? detail}
+        </p>
+      </div>
+      {waiting ? (
+        <div className="flex shrink-0 items-center gap-1.5">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={pending !== null}
+            onClick={() => run("dismiss")}
+          >
+            <X className="mr-1 h-3.5 w-3.5" aria-hidden />
+            {t("recovery.dismiss", { defaultValue: "Dismiss" })}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            disabled={pending !== null}
+            onClick={() => run("continue")}
+          >
+            <RotateCcw className="mr-1 h-3.5 w-3.5" aria-hidden />
+            {t("recovery.continue", { defaultValue: "Continue" })}
+          </Button>
+        </div>
+      ) : null}
+    </div>
+  );
+}

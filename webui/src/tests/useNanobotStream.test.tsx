@@ -73,6 +73,7 @@ function fakeClient() {
   const runStartedAtByChatId = new Map<string, number>();
   const unsettledRunByChatId = new Map<string, boolean>();
   const goalStateByChatId = new Map<string, GoalStateWsPayload>();
+  const requestMutation = vi.fn().mockResolvedValue({});
   let status: ConnectionStatus = "open";
 
   function recordGoalStatusForRunStrip(chatId: string, ev: InboundEvent) {
@@ -133,6 +134,7 @@ function fakeClient() {
         return () => set!.delete(h);
       },
       sendMessage: vi.fn(),
+      requestMutation,
       finishRunLocally: vi.fn(),
       newChat: vi.fn(),
       forkChat: vi.fn(),
@@ -157,6 +159,7 @@ function fakeClient() {
     setUnsettled(chatId: string, unsettled: boolean) {
       unsettledRunByChatId.set(chatId, unsettled);
     },
+    requestMutation,
   };
 }
 
@@ -346,6 +349,93 @@ describe("useNanobotStream", () => {
       role: "assistant",
       content: "final chunk",
       isStreaming: false,
+    });
+    expect(result.current.isStreaming).toBe(false);
+  });
+
+  it("stamps provider usage and latest context on the completed answer", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useNanobotStream("chat-usage", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+
+    act(() => {
+      fake.emit("chat-usage", {
+        event: "delta",
+        chat_id: "chat-usage",
+        text: "done",
+        turn_id: "turn-usage",
+      });
+      fake.emit("chat-usage", {
+        event: "turn_end",
+        chat_id: "chat-usage",
+        turn_id: "turn-usage",
+        latency_ms: 18_200,
+        context_window_tokens: 128_000,
+        usage: {
+          prompt_tokens: 12_400,
+          completion_tokens: 823,
+          cached_tokens: 9_672,
+          context_tokens: 8_100,
+          request_count: 3,
+        },
+      });
+    });
+
+    expect(result.current.messages).toHaveLength(1);
+    expect(result.current.messages[0]).toMatchObject({
+      content: "done",
+      isStreaming: false,
+      latencyMs: 18_200,
+      contextWindowTokens: 128_000,
+      usage: {
+        prompt_tokens: 12_400,
+        completion_tokens: 823,
+        cached_tokens: 9_672,
+        context_tokens: 8_100,
+        request_count: 3,
+      },
+    });
+  });
+
+  it("exposes typed recovery state and validates actions with its recovery id", async () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useNanobotStream("chat-recovery", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+
+    act(() => {
+      fake.emit("chat-recovery", {
+        event: "recovery_state",
+        chat_id: "chat-recovery",
+        recovery_id: "recovery-1",
+        status: "awaiting_user",
+        reason: "tool_state_uncertain",
+        message: "A tool may have been interrupted.",
+      });
+    });
+
+    expect(result.current.recoveryState).toEqual({
+      recovery_id: "recovery-1",
+      status: "awaiting_user",
+      reason: "tool_state_uncertain",
+      message: "A tool may have been interrupted.",
+    });
+    expect(result.current.isStreaming).toBe(false);
+
+    await act(async () => result.current.continueRecovery());
+    expect(fake.requestMutation).toHaveBeenCalledWith("recovery.continue", {
+      chat_id: "chat-recovery",
+      recovery_id: "recovery-1",
+    });
+
+    act(() => {
+      fake.emit("chat-recovery", {
+        event: "recovery_state",
+        chat_id: "chat-recovery",
+        recovery_id: "recovery-1",
+        status: "recovered",
+      });
     });
     expect(result.current.isStreaming).toBe(false);
   });

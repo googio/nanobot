@@ -39,6 +39,26 @@ export interface UIMediaAttachment {
 
 export interface UIMessageSource { kind: "cron" | "local_trigger" | "trigger" | string; label?: string; }
 
+export interface TurnUsage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  cached_tokens?: number;
+  context_tokens?: number;
+  request_count?: number;
+  estimated_tokens?: number;
+  [key: string]: number | undefined;
+}
+
+export type RecoveryStatus = "resuming" | "awaiting_user" | "recovered" | "failed";
+
+export interface RecoveryState {
+  status: RecoveryStatus;
+  recovery_id: string;
+  reason?: string;
+  message?: string;
+  attempts?: number;
+}
+
 export interface UIMessage {
   id: string;
   role: Role;
@@ -77,6 +97,10 @@ export interface UIMessage {
   latencyMs?: number;
   /** Client epoch milliseconds when the definitive ``turn_end`` was received. */
   completedAt?: number;
+  /** Additive model usage for this turn; context_tokens is the final request only. */
+  usage?: TurnUsage;
+  /** Configured context-window capacity for the model used by this turn. */
+  contextWindowTokens?: number;
   /** Lightweight provenance for proactive assistant messages. */
   source?: UIMessageSource;
   /** Stable protocol metadata for grouping all activity emitted by one user turn. */
@@ -1208,7 +1232,13 @@ export interface InboundTurnMetadata {
 
 export type InboundEvent =
   | { event: "ready"; chat_id: string; client_id: string }
-  | { event: "attached"; chat_id: string; temporary?: boolean }
+  | {
+      event: "attached";
+      chat_id: string;
+      temporary?: boolean;
+      recovery_state?: RecoveryState;
+      usage?: TurnUsage;
+    }
   | {
       event: "message_accepted";
       chat_id: string;
@@ -1248,6 +1278,10 @@ export type InboundEvent =
       /** Optional structured payload on progress frames (channel-specific). */
       agent_ui?: AgentUIBlob;
     } & InboundTurnMetadata)
+  | ({
+      event: "recovery_state";
+      chat_id: string;
+    } & RecoveryState)
   | ({
       event: "file_edit";
       chat_id: string;
@@ -1299,6 +1333,8 @@ export type InboundEvent =
       event: "turn_end";
       chat_id: string;
       latency_ms?: number;
+      usage?: TurnUsage;
+      context_window_tokens?: number;
       /** Authoritative sustained-goal snapshot for this chat (same shape as ``goal_state`` events). */
       goal_state?: GoalStateWsPayload;
     } & InboundTurnMetadata)
