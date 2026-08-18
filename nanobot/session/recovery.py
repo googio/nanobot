@@ -7,6 +7,7 @@ whether an interrupted tool call is safe to replay.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import json
 from collections.abc import Iterable, Mapping
@@ -57,6 +58,10 @@ class RecoveryAdmission(Protocol):
     """Narrow AgentLoop boundary for queued recovery validation."""
 
     async def admit(self, message: InboundMessage) -> bool: ...
+
+    def register_recovery_task(self, session_key: str, task: asyncio.Task[Any]) -> None: ...
+
+    def unregister_recovery_task(self, session_key: str, task: asyncio.Task[Any]) -> None: ...
 
 
 def record_pending_followup(session: Session, message: InboundMessage) -> str | None:
@@ -309,6 +314,31 @@ class RecoveryCoordinator:
     sessions: SessionManager
     bus: MessageBus
     unified_session: bool = False
+    _active_recovery_tasks: dict[str, asyncio.Task[Any]] = dataclasses.field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+    )
+
+    def register_recovery_task(self, session_key: str, task: asyncio.Task[Any]) -> None:
+        """Track the task that owns an automatic recovery continuation."""
+        self._active_recovery_tasks[session_key] = task
+
+    def unregister_recovery_task(self, session_key: str, task: asyncio.Task[Any]) -> None:
+        """Drop a recovery task without removing a newer task for the same session."""
+        if self._active_recovery_tasks.get(session_key) is task:
+            self._active_recovery_tasks.pop(session_key, None)
+
+    async def _cancel_active_recovery(self, session_key: str) -> None:
+        """Stop an automatic continuation before accepting newer user input."""
+        task = self._active_recovery_tasks.get(session_key)
+        if task is None or task is asyncio.current_task() or task.done():
+            return
+        task.cancel()
+        # AgentLoop's cancellation path materializes any partial checkpoint and
+        # releases its pending queue. Wait for that ownership to be released
+        # before the newer message is routed.
+        await asyncio.gather(task, return_exceptions=True)
 
     async def scan(self) -> None:
         """Recover every interrupted WebUI session once at gateway startup."""
@@ -353,6 +383,7 @@ class RecoveryCoordinator:
         session = self.sessions.get_or_create(message.session_key)
         state = recovery_state_from_metadata(session.metadata)
         if state and state["status"] in {"resuming", "awaiting_user", "failed"}:
+            await self._cancel_active_recovery(message.session_key)
             restore_runtime_checkpoint(session)
             if not restore_pending_interruption(session, superseded=True):
                 append_recovery_interruption(session, superseded=True)

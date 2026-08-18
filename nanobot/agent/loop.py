@@ -87,6 +87,7 @@ from nanobot.session.model_selection import (
 )
 from nanobot.session.recovery import (
     PENDING_FOLLOWUP_ID_KEY,
+    RECOVERY_INBOUND_METADATA_KEY,
     RecoveryAdmission,
     acknowledge_pending_followups,
     record_pending_followup,
@@ -1291,6 +1292,17 @@ class AgentLoop:
                         break
                 if deferred:
                     continue
+                # A newer WebUI message must supersede an automatic recovery
+                # before it is injected into that recovery's pending queue.
+                # Without this admission point, a recovered turn could finish
+                # first and only then observe the user's newer request.
+                if (
+                    effective_key in self._pending_queues
+                    and msg.channel == "websocket"
+                    and self.recovery_admission is not None
+                    and not await self.recovery_admission.admit(msg)
+                ):
+                    continue
                 # If this session already has an active pending queue (i.e. a task
                 # is processing this session), route the message there for mid-turn
                 # injection instead of creating a competing task.
@@ -1339,7 +1351,10 @@ class AgentLoop:
                 # Compute the effective session key before dispatching
                 # This ensures /stop command can find tasks correctly when unified session is enabled
                 task = asyncio.create_task(self._dispatch(msg))
-                active_tasks = self._active_tasks.setdefault(effective_key, set())
+                active_tasks: set[asyncio.Task[Any]] = self._active_tasks.setdefault(
+                    effective_key,
+                    set(),
+                )
                 active_tasks.add(task)
                 task.add_done_callback(active_tasks.discard)
         finally:
@@ -1360,9 +1375,21 @@ class AgentLoop:
         session_key = self._effective_session_key(msg)
         if session_key != msg.session_key:
             msg = dataclasses.replace(msg, session_key_override=session_key)
-        if self.recovery_admission is not None and not await self.recovery_admission.admit(msg):
-            logger.info("Skipped stale recovery for session {}", session_key)
-            return
+        recovery_task_registered = False
+        recovery_admission = self.recovery_admission
+        current_task: asyncio.Task[Any] | None = None
+        if recovery_admission is not None:
+            recovery_id = msg.metadata.get(RECOVERY_INBOUND_METADATA_KEY)
+            if isinstance(recovery_id, str) and recovery_id:
+                current_task = asyncio.current_task()
+                if current_task is not None:
+                    recovery_admission.register_recovery_task(session_key, current_task)
+                    recovery_task_registered = True
+            if not await recovery_admission.admit(msg):
+                logger.info("Skipped stale recovery for session {}", session_key)
+                if recovery_task_registered and current_task is not None:
+                    recovery_admission.unregister_recovery_task(session_key, current_task)
+                return
         lock = self._get_session_lock(session_key)
         gate = self._concurrency_gate or nullcontext()
 
@@ -1473,6 +1500,12 @@ class AgentLoop:
                         await delivery.idle()
                     await self._publish_next_deferred_automation_turn(session_key)
         finally:
+            if (
+                recovery_task_registered
+                and current_task is not None
+                and recovery_admission is not None
+            ):
+                recovery_admission.unregister_recovery_task(session_key, current_task)
             if pending is None:
                 await delivery.idle()
                 await self._publish_next_deferred_automation_turn(session_key)

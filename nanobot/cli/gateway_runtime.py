@@ -857,6 +857,7 @@ def _run_gateway(
         tasks: list[asyncio.Task[Any]] = []
         shutdown_task: asyncio.Task[Any] | None = None
         runtime_tasks: asyncio.Future[list[Any]] | None = None
+        startup_complete = False
         shutdown_event = asyncio.Event()
         cli_terminal._ensure_interactive_tty_mode()
         restore_shutdown_handlers = _install_gateway_shutdown_handlers(
@@ -927,6 +928,7 @@ def _run_gateway(
                     name="nanobot-webui-dev-server",
                 ))
             runtime_tasks = asyncio.gather(*tasks)
+            startup_complete = True
             shutdown_task = asyncio.create_task(
                 shutdown_event.wait(),
                 name="nanobot-gateway-shutdown",
@@ -948,6 +950,10 @@ def _run_gateway(
 
             console.print("\n[red]Error: Gateway crashed unexpectedly[/red]")
             console.print(traceback.format_exc())
+            if not startup_complete:
+                # Do not report a successful gateway command when startup
+                # failed before any runtime task or listener was created.
+                raise typer.Exit(1)
         finally:
             try:
                 if shutdown_task and not shutdown_task.done():

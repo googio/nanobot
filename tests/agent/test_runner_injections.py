@@ -982,6 +982,39 @@ async def test_followup_routed_to_pending_queue(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_websocket_followup_is_admitted_before_recovery_queue(tmp_path):
+    """Recovery admission runs before a newer WebUI message is injected."""
+    from nanobot.bus.events import InboundMessage
+
+    loop = _make_loop(tmp_path)
+    loop._dispatch = AsyncMock()  # type: ignore[method-assign]
+    admission = MagicMock()
+    admission.admit = AsyncMock(return_value=True)
+    loop.recovery_admission = admission
+
+    session_key = "websocket:chat"
+    pending = asyncio.Queue(maxsize=20)
+    loop._pending_queues[session_key] = pending
+
+    run_task = asyncio.create_task(loop.run())
+    msg = InboundMessage(
+        channel="websocket",
+        sender_id="u",
+        chat_id="chat",
+        content="new request",
+    )
+    await loop.bus.publish_inbound(msg)
+
+    queued_msg = await asyncio.wait_for(pending.get(), timeout=2)
+    admission.admit.assert_awaited_once_with(msg)
+    assert queued_msg.content == msg.content
+    assert queued_msg.metadata["_recovery_followup_id"]
+
+    loop.stop()
+    await asyncio.wait_for(run_task, timeout=2)
+
+
+@pytest.mark.asyncio
 async def test_mid_turn_subagent_result_does_not_resolve_a_new_turn_route(tmp_path):
     """Injected results stay inside the active turn instead of opening a side turn."""
     from nanobot.bus.events import InboundMessage

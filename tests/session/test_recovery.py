@@ -242,6 +242,41 @@ async def test_new_user_message_supersedes_queued_recovery(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
+async def test_new_user_message_cancels_active_recovery_task(tmp_path: Path) -> None:
+    coordinator, bus, sessions = _coordinator(tmp_path)
+    session = sessions.get_or_create("websocket:chat")
+    session.metadata[RECOVERY_METADATA_KEY] = {
+        "status": "resuming",
+        "recovery_id": "active",
+        "attempts": 1,
+    }
+    _persist(sessions, session)
+
+    started = asyncio.Event()
+
+    async def _active_recovery() -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    task = asyncio.create_task(_active_recovery())
+    await started.wait()
+    coordinator.register_recovery_task("websocket:chat", task)
+
+    newer = InboundMessage(
+        channel="websocket",
+        sender_id="user",
+        chat_id="chat",
+        content="new request",
+    )
+    assert await coordinator.admit(newer) is True
+    assert task.cancelled()
+    restored = sessions.get_or_create("websocket:chat")
+    assert restored.metadata[RECOVERY_METADATA_KEY]["reason"] == "superseded"
+    assert restored.messages[-1]["_recovery_interrupted"] is True
+    assert bus.outbound.qsize() == 1
+
+
+@pytest.mark.asyncio
 async def test_recovery_action_rejects_stale_page_and_continues_current_state(
     tmp_path: Path,
 ) -> None:
