@@ -103,6 +103,7 @@ if TYPE_CHECKING:
         ToolsConfig,
     )
     from nanobot.cron.service import CronService
+    from nanobot.session.recovery import RecoveryAdmission
     from nanobot.triggers.local_store import LocalTriggerStore
 
 _T = TypeVar("_T")
@@ -302,6 +303,7 @@ class AgentLoop:
         _tc = tools_config or ToolsConfig()
         defaults = AgentDefaults()
         self.bus = bus
+        self.recovery_admission: RecoveryAdmission | None = None
         if turn_delivery_factory is not None:
             if turn_delivery_factory.bus is not bus:
                 raise ValueError("turn delivery factory must use the agent message bus")
@@ -1325,6 +1327,9 @@ class AgentLoop:
         session_key = self._effective_session_key(msg)
         if session_key != msg.session_key:
             msg = dataclasses.replace(msg, session_key_override=session_key)
+        if self.recovery_admission is not None and not await self.recovery_admission.admit(msg):
+            logger.info("Skipped stale recovery for session {}", session_key)
+            return
         lock = self._get_session_lock(session_key)
         gate = self._concurrency_gate or nullcontext()
 
@@ -1733,7 +1738,12 @@ class AgentLoop:
 
         if self._restore_runtime_checkpoint(session):
             self.sessions.save(session)
-        if self._restore_pending_user_turn(session):
+        from nanobot.session.recovery import RECOVERY_INBOUND_METADATA_KEY
+
+        if (
+            RECOVERY_INBOUND_METADATA_KEY not in msg.metadata
+            and self._restore_pending_user_turn(session)
+        ):
             self.sessions.save(session)
 
     async def _compact_session(self, ctx: TurnContext) -> None:
@@ -2213,136 +2223,17 @@ class AgentLoop:
         if self._RUNTIME_CHECKPOINT_KEY in session.metadata:
             session.metadata.pop(self._RUNTIME_CHECKPOINT_KEY, None)
 
-    @staticmethod
-    def _checkpoint_message_key(message: dict[str, Any]) -> tuple[Any, ...]:
-        return (
-            message.get("role"),
-            message.get("content"),
-            message.get("tool_call_id"),
-            message.get("name"),
-            message.get("tool_calls"),
-            message.get("reasoning_content"),
-            message.get("thinking_blocks"),
-        )
-
     def _restore_runtime_checkpoint(self, session: Session) -> bool:
         """Materialize an unfinished turn into session history before a new request."""
-        from datetime import datetime
+        from nanobot.session.recovery import restore_runtime_checkpoint
 
-        checkpoint = cast(
-            object,
-            session.metadata.get(self._RUNTIME_CHECKPOINT_KEY),
-        )
-        if not isinstance(checkpoint, dict):
-            return False
-        checkpoint_data = cast(dict[str, Any], checkpoint)
-
-        assistant_message = cast(object, checkpoint_data.get("assistant_message"))
-        completed_tool_results = cast(
-            Iterable[object],
-            checkpoint_data.get("completed_tool_results") or [],
-        )
-        pending_tool_calls = cast(
-            Iterable[object],
-            checkpoint_data.get("pending_tool_calls") or [],
-        )
-
-        restored_messages: list[dict[str, Any]] = []
-        if isinstance(assistant_message, dict):
-            restored = dict(cast(dict[str, Any], assistant_message))
-            restored.setdefault("timestamp", datetime.now().isoformat())
-            restored_messages.append(restored)
-        for message in completed_tool_results:
-            if isinstance(message, dict):
-                restored = dict(cast(dict[str, Any], message))
-                restored.setdefault("timestamp", datetime.now().isoformat())
-                restored_messages.append(restored)
-        for tool_call in pending_tool_calls:
-            if not isinstance(tool_call, dict):
-                continue
-            tool_call_data = cast(dict[str, Any], tool_call)
-            tool_id = tool_call_data.get("id")
-            function_data = cast(
-                dict[str, Any],
-                tool_call_data.get("function") or {},
-            )
-            name = function_data.get("name") or "tool"
-            restored_messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tool_id,
-                    "name": name,
-                    "content": "Error: Task interrupted before this tool finished.",
-                    "timestamp": datetime.now().isoformat(),
-                }
-            )
-
-        overlap = 0
-        max_overlap = min(len(session.messages), len(restored_messages))
-        for size in range(max_overlap, 0, -1):
-            existing = session.messages[-size:]
-            restored = restored_messages[:size]
-            if all(
-                self._checkpoint_message_key(left) == self._checkpoint_message_key(right)
-                for left, right in zip(existing, restored)
-            ):
-                overlap = size
-                break
-        appended_messages = restored_messages[overlap:]
-        session.messages.extend(appended_messages)
-        assistant_message_data = (
-            cast(dict[str, Any], assistant_message)
-            if isinstance(assistant_message, dict)
-            else None
-        )
-        provider_state_is_synchronized = (
-            checkpoint_data.get(self._PROVIDER_STATE_CHECKPOINT_VERSION_KEY)
-            == self._PROVIDER_STATE_CHECKPOINT_VERSION
-        )
-        phase = checkpoint_data.get("phase")
-        exact_final_response = (
-            phase == "final_response"
-            and assistant_message_data is not None
-            and assistant_message_data.get("role") == "assistant"
-            and not bool(checkpoint_data.get("completed_tool_results"))
-            and not bool(checkpoint_data.get("pending_tool_calls"))
-        )
-        exact_completed_tools = (
-            phase == "tools_completed"
-            and assistant_message_data is not None
-            and assistant_message_data.get("role") == "assistant"
-            and not bool(checkpoint_data.get("pending_tool_calls"))
-        )
-        if not (
-            provider_state_is_synchronized
-            and (exact_final_response or exact_completed_tools)
-        ):
-            session.provider_state = None
-
-        self._clear_pending_user_turn(session)
-        self._clear_runtime_checkpoint(session)
-        return True
+        return restore_runtime_checkpoint(session)
 
     def _restore_pending_user_turn(self, session: Session) -> bool:
         """Close a turn that only persisted the user message before crashing."""
-        from datetime import datetime
+        from nanobot.session.recovery import restore_pending_interruption
 
-        if not session.metadata.get(self._PENDING_USER_TURN_KEY):
-            return False
-
-        if session.messages and session.messages[-1].get("role") == "user":
-            session.messages.append(
-                {
-                    "role": "assistant",
-                    "content": "Error: Task interrupted before a response was generated.",
-                    "timestamp": datetime.now().isoformat(),
-                }
-            )
-            session.provider_state = None
-            session.updated_at = datetime.now()
-
-        self._clear_pending_user_turn(session)
-        return True
+        return restore_pending_interruption(session)
 
     async def process_direct(
         self,

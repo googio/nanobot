@@ -82,6 +82,7 @@ def _make_handler(
     channel_feature_action: Any | None = None,
     channel_runtime_status: Any | None = None,
     mcp_reload: Any | None = None,
+    recovery_action: Any | None = None,
 ) -> GatewayServices:
     config = WebSocketConfig.model_validate(cfg) if isinstance(cfg, dict) else cfg
     workspace = workspace_path or Path.cwd()
@@ -102,6 +103,7 @@ def _make_handler(
         channel_feature_action=channel_feature_action,
         channel_runtime_status=channel_runtime_status,
         mcp_reload=mcp_reload,
+        recovery_action=recovery_action,
     )
 
 
@@ -120,6 +122,7 @@ def _ch(
     channel_feature_action: Any | None = None,
     channel_runtime_status: Any | None = None,
     mcp_reload: Any | None = None,
+    recovery_action: Any | None = None,
     **extra: Any,
 ) -> WebSocketChannel:
     cfg: dict[str, Any] = {
@@ -144,6 +147,7 @@ def _ch(
         channel_feature_action=channel_feature_action,
         channel_runtime_status=channel_runtime_status,
         mcp_reload=mcp_reload,
+        recovery_action=recovery_action,
     )
     return InProcessHttpChannel(cfg, bus, gateway=gateway)
 
@@ -3265,6 +3269,28 @@ async def _webui_mutate(
         headers=list(response.headers.raw_items()),
         content=response.body,
         request=request,
+    )
+
+
+@pytest.mark.asyncio
+async def test_recovery_mutation_uses_authenticated_websocket_action(bus: MagicMock) -> None:
+    recovery_action = AsyncMock(return_value={
+        "status": "resuming",
+        "recovery_id": "recovery-1",
+    })
+    channel = _ch(bus, recovery_action=recovery_action)
+
+    response = await _webui_mutate(
+        channel,
+        "recovery.continue",
+        {"chat_id": "chat-1", "recovery_id": "recovery-1"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "resuming"
+    recovery_action.assert_awaited_once_with(
+        "continue",
+        {"chat_id": "chat-1", "recovery_id": "recovery-1"},
     )
 
 

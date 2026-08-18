@@ -1846,13 +1846,24 @@ def replay_transcript_to_ui_messages(
             kept.append(m)
         messages = kept
 
-    def stamp_latency(latency_ms: int) -> None:
+    def stamp_completion(
+        *,
+        latency_ms: int | None = None,
+        usage: dict[str, int] | None = None,
+        context_window_tokens: int | None = None,
+    ) -> None:
         for i in range(len(messages) - 1, -1, -1):
             if messages[i].get("role") == "assistant" and messages[i].get("kind") != "trace":
+                completion: dict[str, Any] = {"isStreaming": False}
+                if latency_ms is not None:
+                    completion["latencyMs"] = latency_ms
+                if usage:
+                    completion["usage"] = usage
+                if context_window_tokens is not None:
+                    completion["contextWindowTokens"] = context_window_tokens
                 messages[i] = {
                     **messages[i],
-                    "latencyMs": latency_ms,
-                    "isStreaming": False,
+                    **completion,
                 }
                 return
 
@@ -2329,8 +2340,26 @@ def replay_transcript_to_ui_messages(
                     messages[i] = {**m, "isStreaming": False}
             prune_reasoning_only()
             lat = rec.get("latency_ms")
-            if isinstance(lat, (int, float)) and lat >= 0:
-                stamp_latency(int(lat))
+            usage = rec.get("usage")
+            sanitized_usage = (
+                {
+                    key: value
+                    for key, value in cast(dict[object, object], usage).items()
+                    if isinstance(key, str) and type(value) is int and value >= 0
+                }
+                if isinstance(usage, dict)
+                else None
+            )
+            context_window = rec.get("context_window_tokens")
+            stamp_completion(
+                latency_ms=int(lat) if isinstance(lat, (int, float)) and lat >= 0 else None,
+                usage=sanitized_usage,
+                context_window_tokens=(
+                    int(context_window)
+                    if isinstance(context_window, (int, float)) and context_window >= 0
+                    else None
+                ),
+            )
             buffer_message_id = None
             buffer_parts = []
             continue

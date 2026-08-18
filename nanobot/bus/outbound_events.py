@@ -63,6 +63,15 @@ class TurnEndEvent(OutboundEvent):
 
 
 @dataclass(frozen=True)
+class RecoveryStateEvent(OutboundEvent):
+    status: str
+    recovery_id: str
+    reason: str | None = None
+    message: str | None = None
+    attempts: int = 0
+
+
+@dataclass(frozen=True)
 class GoalStatusEvent(OutboundEvent):
     status: str
     started_at: float | None = None

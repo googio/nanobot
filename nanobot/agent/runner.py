@@ -20,6 +20,7 @@ from nanobot.agent.context_governance import (
 )
 from nanobot.agent.hook import AgentHook, AgentHookContext, AgentRunHookContext
 from nanobot.agent.tools.registry import ToolRegistry, is_tool_error_result
+from nanobot.agent.turn_usage import TurnUsageAccumulator
 from nanobot.providers.base import (
     LLMProvider,
     LLMResponse,
@@ -425,7 +426,7 @@ class AgentRunner:
     ) -> AgentRunResult:
         final_content: str | None = None
         tools_used: list[str] = []
-        usage: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
+        usage = TurnUsageAccumulator()
         error: str | None = None
         stop_reason = "completed"
         tool_events: list[dict[str, str]] = []
@@ -502,7 +503,7 @@ class AgentRunner:
             response.content = cleaned_content
             raw_usage = self._usage_or_estimate(spec, messages_for_model, response)
             context.usage = dict(raw_usage)
-            self._accumulate_usage(usage, raw_usage)
+            usage.record(raw_usage)
             if reasoning_text and not context.streamed_reasoning:
                 await hook.emit_reasoning(reasoning_text)
                 await hook.emit_reasoning_end()
@@ -665,7 +666,7 @@ class AgentRunner:
                     conversation_state=conversation_state,
                 )
                 retry_usage = self._usage_or_estimate(spec, retry_messages, response)
-                self._accumulate_usage(usage, retry_usage)
+                usage.record(retry_usage)
                 raw_usage = self._merge_usage(raw_usage, retry_usage)
                 context.response = response
                 context.usage = dict(raw_usage)
@@ -864,7 +865,7 @@ class AgentRunner:
             final_content=final_content,
             messages=messages,
             tools_used=tools_used,
-            usage=usage,
+            usage=usage.snapshot(),
             stop_reason=stop_reason,
             error=error,
             tool_events=tool_events,
@@ -1229,7 +1230,7 @@ class AgentRunner:
         spec: AgentRunSpec,
         hook: AgentHook,
         messages: list[dict[str, Any]],
-        usage: dict[str, int],
+        usage: TurnUsageAccumulator,
         conversation_state: ProviderConversationStateController,
     ) -> str | None:
         retry_messages = self._budget_exhausted_finalization_messages(messages)
@@ -1249,7 +1250,7 @@ class AgentRunner:
             return None
 
         raw_usage = self._usage_or_estimate(spec, retry_messages, response)
-        self._accumulate_usage(usage, raw_usage)
+        usage.record(raw_usage)
         if response.finish_reason == "error" or response.has_tool_calls:
             logger.warning(
                 "Budget-exhausted finalization returned finish_reason='{}' "
@@ -1383,11 +1384,6 @@ class AgentRunner:
         return max(0, usage.get("total_tokens", 0) or (
             usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0)
         ))
-
-    @staticmethod
-    def _accumulate_usage(target: dict[str, int], addition: dict[str, int]) -> None:
-        for key, value in addition.items():
-            target[key] = target.get(key, 0) + value
 
     @staticmethod
     def _merge_usage(left: dict[str, int], right: dict[str, int]) -> dict[str, int]:

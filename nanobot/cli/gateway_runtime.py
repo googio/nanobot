@@ -322,6 +322,7 @@ def _run_gateway(
     from nanobot.providers.fallback_provider import FallbackProvider
     from nanobot.providers.image_generation import image_gen_provider_configs
     from nanobot.session.manager import SessionManager
+    from nanobot.session.recovery import RecoveryCoordinator
     from nanobot.session.webui_turns import (
         WebuiTurnCoordinator,
         WebuiTurnRoutePolicy,
@@ -441,6 +442,12 @@ def _run_gateway(
         hook_factories=[create_file_edit_activity_hook],
         tool_registry=tools,
     )
+    recovery = RecoveryCoordinator(
+        sessions=session_manager,
+        bus=bus,
+        unified_session=config.agents.defaults.unified_session,
+    )
+    agent.recovery_admission = recovery
     def _schedule_webui_background(awaitable: Awaitable[None]) -> None:
         agent.schedule_background(cast(Coroutine[Any, Any, None], awaitable))
 
@@ -448,6 +455,7 @@ def _run_gateway(
         bus=bus,
         sessions=session_manager,
         schedule_background=_schedule_webui_background,
+        recovery=recovery,
     )
     webui_turn_coordinator.subscribe(runtime_events)
     from nanobot.bus.events import OutboundMessage
@@ -686,6 +694,7 @@ def _run_gateway(
         webui_mcp_runtime_status=mcp_provider.runtime_status,
         webui_mcp_reload=mcp_provider.reload,
         webui_skill_state_action=_webui_skill_state_action,
+        webui_recovery_action=recovery.handle_action,
         config_path=Path(config_path),
     )
 
@@ -896,6 +905,10 @@ def _run_gateway(
                 asyncio.create_task(
                     _monitor_local_clients(),
                     name="nanobot-gateway-client-monitor",
+                ),
+                asyncio.create_task(
+                    recovery.scan(),
+                    name="nanobot-webui-recovery",
                 ),
             ]
             if health_server_enabled:

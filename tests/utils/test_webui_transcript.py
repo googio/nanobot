@@ -393,6 +393,41 @@ def test_replay_delta_and_turn_end(tmp_path, monkeypatch) -> None:
     assert msgs[1]["latencyMs"] == 42
 
 
+def test_replay_turn_end_preserves_usage_semantics(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("nanobot.config.paths.get_data_dir", lambda: tmp_path)
+    key = "websocket:t-usage"
+    for event in (
+        {"event": "user", "chat_id": "t-usage", "text": "q"},
+        {"event": "message", "chat_id": "t-usage", "text": "a"},
+        {
+            "event": "turn_end",
+            "chat_id": "t-usage",
+            "latency_ms": 18_200,
+            "usage": {
+                "prompt_tokens": 12_400,
+                "completion_tokens": 823,
+                "cached_tokens": 9_672,
+                "context_tokens": 8_200,
+                "request_count": 3,
+            },
+            "context_window_tokens": 128_000,
+        },
+    ):
+        append_transcript_object(key, event)
+
+    messages = replay_transcript_to_ui_messages(read_transcript_lines(key))
+
+    assert messages[-1]["usage"] == {
+        "prompt_tokens": 12_400,
+        "completion_tokens": 823,
+        "cached_tokens": 9_672,
+        "context_tokens": 8_200,
+        "request_count": 3,
+    }
+    assert messages[-1]["contextWindowTokens"] == 128_000
+    assert messages[-1]["latencyMs"] == 18_200
+
+
 def test_replay_uses_persisted_created_at_ms() -> None:
     msgs = replay_transcript_to_ui_messages(
         [

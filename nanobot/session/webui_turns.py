@@ -41,6 +41,7 @@ from nanobot.runtime_context import public_history_message
 from nanobot.session.goal_state import goal_state_ws_blob
 from nanobot.session.history_visibility import is_hidden_history_message
 from nanobot.session.manager import Session, SessionManager
+from nanobot.session.recovery import RecoveryCoordinator
 from nanobot.utils.helpers import strip_think, truncate_text
 from nanobot.utils.llm_runtime import LLMRuntime
 from nanobot.webui.metadata import (
@@ -482,6 +483,7 @@ class WebuiTurnCoordinator:
     bus: MessageBus
     sessions: SessionManager
     schedule_background: Callable[[Awaitable[None]], None]
+    recovery: RecoveryCoordinator | None = None
 
     def subscribe(self, runtime_events: RuntimeEventBus) -> Callable[[], None]:
         """Subscribe this coordinator to runtime events."""
@@ -578,6 +580,8 @@ class WebuiTurnCoordinator:
                 event.runtime.context_window_tokens if event.runtime is not None else None
             ),
         )
+        if self.recovery is not None:
+            await self.recovery.turn_completed(event.context.session_key)
         self._schedule_title_update_from_event(event)
 
     async def _handle_goal_state_changed(self, event: GoalStateChanged) -> None:
