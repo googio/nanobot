@@ -101,6 +101,20 @@ export function ModelPresetBadge({
     model: modelDetail ?? modelPresets[listedIndex]?.model,
     provider: provider || modelPresets[listedIndex]?.provider,
   };
+  const fallbackPreset = fallbackModelName
+    ? modelPresets.find((preset) => preset.model?.trim() === fallbackModelName.trim())
+    : undefined;
+  const fallbackDisplayLabel = fallbackPreset?.name
+    || fallbackModelName?.trim().split(/[/:]/).pop()
+    || null;
+  const displayLabel = fallbackDisplayLabel || label;
+  const displayModelDetail = fallbackPreset
+    ? fallbackPreset.model
+    : fallbackModelName
+      ? null
+      : modelDetail;
+  const displayProvider = fallbackPreset?.provider
+    || (fallbackModelName ? inferProviderFromModelName(fallbackModelName) : provider);
   const presets = !activeName
     ? modelPresets
     : listedIndex < 0
@@ -218,7 +232,7 @@ export function ModelPresetBadge({
     <Container
       data-switching={motion ? "true" : undefined}
       data-settling={motion?.settling ? "true" : undefined}
-      aria-label={label}
+      aria-label={fallbackModelName ? `${displayLabel} (fallback from ${label})` : label}
       aria-orientation={canSwitch ? "vertical" : undefined}
       aria-valuemax={canSwitch ? presets.length - 1 : undefined}
       aria-valuemin={canSwitch ? 0 : undefined}
@@ -252,12 +266,13 @@ export function ModelPresetBadge({
     >
       <PresetPill
         className={motion && "invisible"}
-        label={label}
-        modelDetail={modelDetail}
-        provider={provider}
-        providerLabel={providerLabel}
+        label={displayLabel}
+        modelDetail={displayModelDetail}
+        provider={displayProvider}
+        providerLabel={fallbackModelName ? null : providerLabel}
         needsSetup={needsSetup}
         fallbackModelName={fallbackModelName}
+        fallbackFromLabel={fallbackModelName ? label : null}
         isHero={isHero}
       />
       {motion ? (
@@ -312,6 +327,7 @@ function PresetPill({
   providerLabel,
   needsSetup = false,
   fallbackModelName,
+  fallbackFromLabel,
   isHero,
   offset,
   scale,
@@ -323,6 +339,7 @@ function PresetPill({
   providerLabel?: string | null;
   needsSetup?: boolean;
   fallbackModelName?: string | null;
+  fallbackFromLabel?: string | null;
   isHero: boolean;
   offset?: number;
   scale?: number;
@@ -335,6 +352,9 @@ function PresetPill({
   const brand = providerBrand(inferredProvider);
   const { logoUrl, onLogoError, onLogoLoad } = useLogoFallback(brand?.logoUrls);
   const title = [...new Set([label, modelDetail, providerLabel].filter(Boolean))].join(" · ");
+  const fallbackTitle = fallbackModelName
+    ? `${fallbackFromLabel || label} · using ${fallbackModelName}`
+    : title;
   const logoTestId = offset !== undefined
     ? undefined
     : needsSetup
@@ -355,7 +375,7 @@ function PresetPill({
     <span
       data-fallback={fallbackModelName ? "true" : undefined}
       data-preset-offset={offset}
-      title={fallbackModelName || title || undefined}
+      title={fallbackTitle || undefined}
       className={cn(
         "composer-model-badge composer-model-pill inline-flex h-full w-fit max-w-full min-w-0 shrink-0 items-center rounded-full border border-border/55 bg-card font-medium text-foreground/70",
         offset === undefined && "shadow-[0_2px_8px_rgba(15,23,42,0.045)]",
