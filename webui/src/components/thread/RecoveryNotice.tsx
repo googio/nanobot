@@ -15,7 +15,8 @@ export function RecoveryNotice({ state, onContinue, onDismiss }: RecoveryNoticeP
   const { t } = useTranslation();
   const [pending, setPending] = useState<"continue" | "dismiss" | null>(null);
   const [error, setError] = useState<string | null>(null);
-  if (state.status === "recovered") return null;
+  const [hiddenRecoveryId, setHiddenRecoveryId] = useState<string | null>(null);
+  if (state.status === "recovered" || hiddenRecoveryId === state.recovery_id) return null;
 
   const waiting = state.status === "awaiting_user" || state.status === "failed";
   const title = state.status === "failed"
@@ -33,8 +34,13 @@ export function RecoveryNotice({ state, onContinue, onDismiss }: RecoveryNoticeP
   const run = (action: "continue" | "dismiss") => {
     setPending(action);
     setError(null);
+    // ``resuming`` is an internal transition, not another task for the user
+    // to monitor. Hide the notice optimistically and only bring it back if
+    // the explicit action is rejected.
+    if (action === "continue") setHiddenRecoveryId(state.recovery_id);
     const operation = action === "continue" ? onContinue() : onDismiss();
     void operation.catch(() => {
+      if (action === "continue") setHiddenRecoveryId(null);
       setError(t("recovery.actionFailed", { defaultValue: "Recovery action failed. Try again." }));
     }).finally(() => setPending(null));
   };
