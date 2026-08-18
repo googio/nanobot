@@ -250,7 +250,11 @@ function TurnUsageMeta({
           {parts.join(" · ")}
         </span>
       </TooltipTrigger>
-      <TooltipContent side="top" align="start" className="max-w-72">
+      <TooltipContent
+        side="top"
+        align="start"
+        className="max-w-96 whitespace-nowrap"
+      >
         {details.length ? details.join(" · ") : parts.join(" · ")}
       </TooltipContent>
     </Tooltip>
