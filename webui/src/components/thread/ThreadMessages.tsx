@@ -30,9 +30,10 @@ export function buildDisplayUnits(
   messages: UIMessage[],
   isStreaming = false,
 ): DisplayUnit[] {
-  return normalizeActivityTimeline(messages, {
-    preserveTrailingActivity: isStreaming,
-  });
+  // Kept for callers that still pass the live flag; projection no longer
+  // changes shape between live and replayed turns.
+  void isStreaming;
+  return normalizeActivityTimeline(messages);
 }
 
 export function assistantForkFlags(units: DisplayUnit[]): boolean[] {

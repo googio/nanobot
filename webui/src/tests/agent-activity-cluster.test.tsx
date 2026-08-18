@@ -398,7 +398,7 @@ describe("AgentActivityCluster", () => {
         vi.advanceTimersByTime(301);
       });
       expect(screen.queryByTestId("agent-activity-scroll")).not.toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Thought" })).toHaveAttribute(
+      expect(screen.getByRole("button", { name: "Worked" })).toHaveAttribute(
         "aria-expanded",
         "false",
       );
@@ -422,7 +422,7 @@ describe("AgentActivityCluster", () => {
       />,
     );
 
-    const button = screen.getByRole("button", { name: "Thought" });
+    const button = screen.getByRole("button", { name: "Worked" });
     expect(button).toHaveAttribute("data-thread-disclosure");
     const chevron = button.querySelector("svg");
     expect(chevron).toBeInTheDocument();
@@ -449,7 +449,7 @@ describe("AgentActivityCluster", () => {
       />,
     );
 
-    expect(screen.getByText("Thought for 12s")).toBeInTheDocument();
+    expect(screen.getByText("Worked for 12s")).toBeInTheDocument();
   });
 
   it("labels mixed tool activity as work instead of thought", () => {
@@ -481,8 +481,8 @@ describe("AgentActivityCluster", () => {
       />,
     );
 
-    expect(screen.getByText("Thought")).toBeInTheDocument();
-    expect(screen.queryByText("Thought for 0s")).not.toBeInTheDocument();
+    expect(screen.getByText("Worked")).toBeInTheDocument();
+    expect(screen.queryByText("Worked for 0s")).not.toBeInTheDocument();
   });
 
   it("renders file edits as one-line activity rows", async () => {

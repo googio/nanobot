@@ -76,6 +76,9 @@ export interface UIMessage {
   fileEdits?: UIFileEdit[];
   /** Activity rows created during the same agent phase share one collapsible block. */
   activitySegmentId?: string;
+  /** Internal projection marker for assistant text emitted before a later tool.
+   * It is not a wire message and is rendered as a compact activity row. */
+  activityKind?: "model";
   /** User turn: optimistic blob URLs for preview. Replay: placeholder chips. */
   images?: UIImage[];
   /** Signed or local UI-renderable media attachments. */

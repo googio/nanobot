@@ -2553,7 +2553,7 @@ describe("useNanobotStream", () => {
     ]);
   });
 
-  it("lets stream_end finish streaming while side-channel status replies arrive", () => {
+  it("keeps the turn active after stream_end while side-channel replies arrive", () => {
     vi.useFakeTimers();
     try {
       const fake = fakeClient();
@@ -2593,6 +2593,19 @@ describe("useNanobotStream", () => {
 
       act(() => {
         vi.advanceTimersByTime(1000);
+      });
+
+      expect(result.current.isStreaming).toBe(true);
+      expect(result.current.messages.find((message) => message.content === "done")).toMatchObject({
+        isStreaming: true,
+      });
+
+      act(() => {
+        fake.emit("chat-status-loop", {
+          event: "turn_end",
+          chat_id: "chat-status-loop",
+          turn_id: promptTurnId,
+        });
       });
 
       expect(result.current.isStreaming).toBe(false);
@@ -2654,7 +2667,7 @@ describe("useNanobotStream", () => {
     expect(result.current.messages).toHaveLength(3);
     expect(result.current.messages[1]).toMatchObject({
       content: "Initial findings",
-      isStreaming: false,
+      isStreaming: true,
     });
 
     act(() => {

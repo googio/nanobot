@@ -1,5 +1,8 @@
 import type { UIMessage } from "@/lib/types";
 
+/** The conversation projection deliberately has only two surfaces per turn:
+ * one activity container and one final answer. The transport may emit many
+ * rows, but callers never need to know how those rows are grouped. */
 export type TurnUnit =
   | {
       type: "activity";
@@ -9,106 +12,102 @@ export type TurnUnit =
     }
   | { type: "message"; message: UIMessage };
 
-interface NormalizeActivityTimelineOptions {
-  preserveTrailingActivity?: boolean;
-}
-
 export function isReasoningOnlyAssistant(message: UIMessage): boolean {
   if (message.role !== "assistant" || message.kind === "trace") return false;
-  if (message.content.trim().length > 0) return false;
+  if (message.activityKind === "model" || message.content.trim().length > 0) return false;
   return !!(message.reasoning?.length || message.reasoningStreaming || message.isStreaming);
 }
 
 export function isAgentActivityMember(message: UIMessage): boolean {
-  return isReasoningOnlyAssistant(message) || message.kind === "trace";
+  return isReasoningOnlyAssistant(message) || message.kind === "trace" || message.activityKind === "model";
 }
 
 export function hasPendingAgentActivity(messages: UIMessage[]): boolean {
-  if (messages.length === 0) return false;
-  const last = messages[messages.length - 1];
-  if (!isAgentActivityMember(last)) return false;
+  const last = messages.at(-1);
+  if (!last || !isAgentActivityMember(last)) return false;
+  if (last.isStreaming || last.reasoningStreaming) return true;
 
-  let trailingStart = messages.length - 1;
-  while (
-    trailingStart > 0
-    && isAgentActivityMember(messages[trailingStart - 1])
-  ) {
-    trailingStart -= 1;
-  }
-
-  const trailing = messages.slice(trailingStart);
-  if (trailing.some((message) => message.isStreaming || message.reasoningStreaming)) {
-    return true;
-  }
-
-  const previous = messages[trailingStart - 1];
-  if (!previous || previous.role !== "assistant" || isAgentActivityMember(previous)) {
-    return true;
-  }
-
-  const trailingTurnIds = new Set(
-    trailing
-      .map((message) => message.turnId)
-      .filter((turnId): turnId is string => typeof turnId === "string" && turnId.length > 0),
-  );
-  if (!previous.turnId) return trailingTurnIds.size > 0;
-  return trailingTurnIds.size > 0 && !trailingTurnIds.has(previous.turnId);
+  const lastTurnId = last.turnId;
+  const previous = messages.at(-2);
+  // A trace without a visible answer is an unfinished turn on replay. Once a
+  // final assistant answer exists after it, the activity is simply history.
+  return !previous
+    || previous.role !== "assistant"
+    || isAgentActivityMember(previous)
+    || previous.turnId !== lastTurnId;
 }
 
+/**
+ * Project raw gateway rows into the stable conversation shape:
+ *
+ *   user → [one live/completed activity surface] → [one final answer]
+ *
+ * Assistant text that is followed by another activity is a model snippet. It
+ * remains visible in the activity timeline, but never creates a second answer
+ * bubble. This is the same causal model used by Codex-style transcripts.
+ */
 export function normalizeActivityTimeline(
   messages: UIMessage[],
-  options: NormalizeActivityTimelineOptions = {},
 ): TurnUnit[] {
   const units: TurnUnit[] = [];
   let turnMessages: UIMessage[] = [];
   let activeTurnId: string | undefined;
   let activeTurnStartedAtMs: number | undefined;
 
-  const flushTurn = (flushOptions: NormalizeActivityTimelineOptions = {}) => {
-    if (turnMessages.length === 0) {
+  const flushTurn = () => {
+    if (!turnMessages.length) {
       activeTurnId = undefined;
+      activeTurnStartedAtMs = undefined;
       return;
     }
 
-    const turnUnits: TurnUnit[] = [];
-    const turnStartedAtMs = activeTurnStartedAtMs;
-    const orderedTurnMessages = orderMessagesByTurnSeq(turnMessages);
-    const visibleMessages = visibleMessagesForTurn(orderedTurnMessages);
-    let visibleIndex = 0;
-    let activityMessages: UIMessage[] = [];
+    const ordered = orderMessagesByTurnSeq(turnMessages);
+    const lastActivityIndex = ordered.reduce(
+      (index, message, current) => isRawActivity(message) ? current : index,
+      -1,
+    );
+    const answerIndices = ordered
+      .map((message, index) => ({ message, index }))
+      .filter(({ message }) => isAssistantAnswer(message));
+    const finalAnswerIndex = answerIndices.at(-1)?.index;
+    // A replay can deliver a completed answer before a late trace row. Keep
+    // that answer visible, but place the late activity in the single activity
+    // surface before it. A still-streaming answer followed by activity is an
+    // intermediate model segment and stays compact inside that surface.
+    const hasFinalAnswer = finalAnswerIndex !== undefined
+      && (finalAnswerIndex > lastActivityIndex || ordered[finalAnswerIndex].isStreaming !== true);
 
-    const flushActivityMessages = () => {
-      if (!activityMessages.length) return;
-      pushActivityUnits(
-        turnUnits,
-        activityMessages,
-        visibleMessages.slice(visibleIndex),
-        turnStartedAtMs,
-      );
-      activityMessages = [];
-    };
-
-    for (const message of orderedTurnMessages) {
-      if (isAgentActivityMember(message)) {
-        activityMessages.push(message);
-        continue;
+    const activity: UIMessage[] = [];
+    const answers: UIMessage[] = [];
+    ordered.forEach((message, index) => {
+      if (isRawActivity(message)) {
+        activity.push(message);
+      } else if (isAssistantAnswer(message)) {
+        if (message.reasoning?.trim() || message.reasoningStreaming) {
+          activity.push(reasoningOnlyMessageFromAnswer(message));
+        }
+        if (hasFinalAnswer && index === finalAnswerIndex) {
+          answers.push(stripInlineReasoning(message));
+        } else {
+          activity.push(modelActivitySnippet(message));
+        }
+      } else {
+        activity.push(message);
       }
+    });
 
-      if (assistantHasInlineReasoning(message)) {
-        activityMessages.push(reasoningOnlyMessageFromAnswer(message));
-        flushActivityMessages();
-        turnUnits.push({ type: "message", message: stripInlineReasoning(message) });
-        visibleIndex += 1;
-        continue;
-      }
-
-      flushActivityMessages();
-      turnUnits.push({ type: "message", message });
-      visibleIndex += 1;
+    if (activity.length) {
+      units.push({
+        type: "activity",
+        messages: activity,
+        turnLatencyMs: activityTurnLatencyMs(activity, ordered),
+        startedAtMs: activeTurnStartedAtMs,
+      });
+    }
+    if (answers.length) {
+      units.push({ type: "message", message: mergeAssistantAnswers(answers) });
     }
 
-    flushActivityMessages();
-    units.push(...normalizeCompletedTurnUnits(consolidateAssistantAnswers(turnUnits), flushOptions));
     turnMessages = [];
     activeTurnId = undefined;
     activeTurnStartedAtMs = undefined;
@@ -122,53 +121,43 @@ export function normalizeActivityTimeline(
       activeTurnStartedAtMs = validCreatedAtMs(message.createdAt);
       continue;
     }
-
-    if (message.turnId && activeTurnId && message.turnId !== activeTurnId) {
-      flushTurn();
-    }
-    if (message.turnId) {
-      activeTurnId = message.turnId;
-    }
+    if (message.turnId && activeTurnId && message.turnId !== activeTurnId) flushTurn();
+    if (message.turnId) activeTurnId = message.turnId;
     turnMessages.push(message);
   }
 
-  flushTurn(options);
+  flushTurn();
   return units;
 }
 
-/** Keep one visible assistant answer per user turn.
- *
- * Providers may emit text before and after tool calls.  The protocol keeps
- * those segments separate for auditability, while the conversation view
- * projects them into one answer so timestamps and actions are not repeated.
- */
-function consolidateAssistantAnswers(turnUnits: TurnUnit[]): TurnUnit[] {
-  const answerIndices: number[] = [];
-  for (let index = 0; index < turnUnits.length; index += 1) {
-    const unit = turnUnits[index];
-    if (unit.type === "message" && unit.message.role === "assistant") {
-      answerIndices.push(index);
-    }
-  }
-  if (answerIndices.length < 2) return turnUnits;
+function isRawActivity(message: UIMessage): boolean {
+  return isAgentActivityMember(message);
+}
 
-  const answers = answerIndices.map((index) => {
-    const unit = turnUnits[index];
-    return unit.type === "message" ? unit.message : null;
-  }).filter((message): message is UIMessage => message !== null);
+function isAssistantAnswer(message: UIMessage): boolean {
+  return message.role === "assistant" && message.kind !== "trace" && message.content.trim().length > 0;
+}
+
+function orderMessagesByTurnSeq(messages: UIMessage[]): UIMessage[] {
+  if (messages.length < 2 || !messages.every((message) => Number.isFinite(message.turnSeq))) {
+    return messages;
+  }
+  return messages
+    .map((message, index) => ({ message, index }))
+    .sort((left, right) => (left.message.turnSeq! - right.message.turnSeq!) || (left.index - right.index))
+    .map(({ message }) => message);
+}
+
+function mergeAssistantAnswers(answers: UIMessage[]): UIMessage {
   const first = answers[0];
-  const last = answers[answers.length - 1];
-  const content = answers
-    .map((message) => message.content.trim())
-    .filter(Boolean)
-    .join("\n\n");
+  const last = answers.at(-1)!;
   const media = answers.flatMap((message) => message.media ?? []);
   const images = answers.flatMap((message) => message.images ?? []);
   const merged: UIMessage = {
     ...first,
     ...last,
     id: first.id,
-    content,
+    content: answers.map((message) => message.content.trim()).filter(Boolean).join("\n\n"),
     createdAt: first.createdAt,
     isStreaming: answers.some((message) => message.isStreaming),
   };
@@ -176,126 +165,17 @@ function consolidateAssistantAnswers(turnUnits: TurnUnit[]): TurnUnit[] {
   else delete merged.media;
   if (images.length) merged.images = images;
   else delete merged.images;
-
-  const insertAt = answerIndices[answerIndices.length - 1];
-  const answerIndexSet = new Set(answerIndices);
-  return turnUnits.flatMap((unit, index) => {
-    if (index === insertAt) return [{ type: "message", message: merged } as TurnUnit];
-    return answerIndexSet.has(index) ? [] : [unit];
-  });
+  return merged;
 }
 
-function orderMessagesByTurnSeq(messages: UIMessage[]): UIMessage[] {
-  if (
-    messages.length < 2
-    || !messages.every((message) => Number.isFinite(message.turnSeq))
-  ) {
-    return messages;
-  }
-  return messages
-    .map((message, index) => ({ message, index }))
-    .sort((left, right) => {
-      const bySeq = (left.message.turnSeq ?? 0) - (right.message.turnSeq ?? 0);
-      return bySeq || left.index - right.index;
-    })
-    .map(({ message }) => message);
-}
-
-function normalizeCompletedTurnUnits(
-  turnUnits: TurnUnit[],
-  options: NormalizeActivityTimelineOptions,
-): TurnUnit[] {
-  if (options.preserveTrailingActivity || turnUnits.length < 2) return turnUnits;
-  if (turnUnits[turnUnits.length - 1]?.type !== "activity") return turnUnits;
-
-  let trailingStart = turnUnits.length - 1;
-  while (trailingStart > 0 && turnUnits[trailingStart - 1]?.type === "activity") {
-    trailingStart -= 1;
-  }
-
-  const previous = turnUnits[trailingStart - 1];
-  if (
-    !previous
-    || previous.type !== "message"
-    || previous.message.role !== "assistant"
-  ) {
-    return turnUnits;
-  }
-
-  return [
-    ...turnUnits.slice(0, trailingStart - 1),
-    ...turnUnits.slice(trailingStart),
-    previous,
-  ];
-}
-
-function visibleMessagesForTurn(messages: UIMessage[]): UIMessage[] {
-  const visibleMessages: UIMessage[] = [];
-  for (const message of messages) {
-    if (isAgentActivityMember(message)) continue;
-    visibleMessages.push(assistantHasInlineReasoning(message) ? stripInlineReasoning(message) : message);
-  }
-  return visibleMessages;
-}
-
-function validCreatedAtMs(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function pushActivityUnits(
-  units: TurnUnit[],
-  activityMessages: UIMessage[],
-  visibleMessages: UIMessage[],
-  startedAtMs?: number,
-) {
-  let runMessages: UIMessage[] = [];
-  let runBucket: "file" | "other" | undefined;
-  let runSegmentId: string | undefined;
-
-  const flushRun = () => {
-    if (!runMessages.length) return;
-    units.push({
-      type: "activity",
-      messages: runMessages,
-      turnLatencyMs: activityTurnLatencyMs(runMessages, visibleMessages),
-      startedAtMs,
-    });
-    runMessages = [];
-    runBucket = undefined;
-    runSegmentId = undefined;
+function modelActivitySnippet(message: UIMessage): UIMessage {
+  return {
+    ...stripInlineReasoning(message),
+    id: `${message.id}-activity`,
+    activityKind: "model",
+    turnPhase: "activity",
+    isStreaming: false,
   };
-
-  for (const message of activityMessages) {
-    const bucket = isFileEditActivityMessage(message) ? "file" : "other";
-    const segmentId = message.activitySegmentId;
-    const segmentChanged =
-      bucket === "file"
-      && runBucket === "file"
-      && !!runSegmentId
-      && !!segmentId
-      && runSegmentId !== segmentId;
-    if ((runBucket && bucket !== runBucket) || segmentChanged) {
-      flushRun();
-    }
-    runBucket = bucket;
-    if (segmentId) runSegmentId = segmentId;
-    runMessages.push(message);
-  }
-
-  flushRun();
-}
-
-function isFileEditActivityMessage(message: UIMessage): boolean {
-  return message.kind === "trace" && !!message.fileEdits?.length;
-}
-
-function assistantHasInlineReasoning(message: UIMessage): boolean {
-  return (
-    message.role === "assistant"
-    && message.kind !== "trace"
-    && message.content.trim().length > 0
-    && (!!message.reasoning?.trim() || !!message.reasoningStreaming)
-  );
 }
 
 function reasoningOnlyMessageFromAnswer(message: UIMessage): UIMessage {
@@ -322,13 +202,17 @@ function stripInlineReasoning(message: UIMessage): UIMessage {
   return next;
 }
 
-function activityTurnLatencyMs(activityMessages: UIMessage[], visibleMessages: UIMessage[]): number | undefined {
-  for (let i = visibleMessages.length - 1; i >= 0; i -= 1) {
-    const latency = visibleMessages[i].latencyMs;
+function validCreatedAtMs(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function activityTurnLatencyMs(activityMessages: UIMessage[], allMessages: UIMessage[]): number | undefined {
+  for (let index = allMessages.length - 1; index >= 0; index -= 1) {
+    const latency = allMessages[index].latencyMs;
     if (isValidLatency(latency)) return latency;
   }
-  for (let i = activityMessages.length - 1; i >= 0; i -= 1) {
-    const latency = activityMessages[i].latencyMs;
+  for (let index = activityMessages.length - 1; index >= 0; index -= 1) {
+    const latency = activityMessages[index].latencyMs;
     if (isValidLatency(latency)) return latency;
   }
   return undefined;

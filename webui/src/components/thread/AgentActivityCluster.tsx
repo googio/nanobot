@@ -3,6 +3,7 @@ import {
   CheckCircle2,
   Clock3,
   Layers,
+  MessageSquareText,
   Search,
   Server,
   Terminal,
@@ -55,6 +56,7 @@ export { isAgentActivityMember, isReasoningOnlyAssistant };
 interface ActivityCounts {
   reasoningSteps: number;
   toolCalls: number;
+  modelSnippets: number;
   cliCount: number;
   mcpCount: number;
   fileCount: number;
@@ -91,9 +93,14 @@ function countActivity(
 ): ActivityCounts {
   let reasoningSteps = 0;
   let toolCalls = 0;
+  let modelSnippets = 0;
   const cliCount = cliRuns.length;
   const mcpCount = mcpRuns.length;
   for (const m of messages) {
+    if (m.activityKind === "model") {
+      modelSnippets += 1;
+      continue;
+    }
     if (isReasoningOnlyAssistant(m)) {
       reasoningSteps += 1;
       continue;
@@ -110,6 +117,7 @@ function countActivity(
   return {
     reasoningSteps,
     toolCalls,
+    modelSnippets,
     cliCount,
     mcpCount,
     fileCount: fileEdits.length,
@@ -131,8 +139,8 @@ interface AgentActivityClusterProps {
 }
 
 /**
- * Outer fold wrapping interleaved reasoning-only assistant rows and tool-trace rows.
- * Fixed max height with inner scroll and a single flat list of activity rows.
+ * One fold wrapping the complete middle of a turn: reasoning, model snippets,
+ * tool traces, and file edits. The final assistant answer stays outside it.
  */
 export function AgentActivityCluster({
   messages,
@@ -165,6 +173,7 @@ export function AgentActivityCluster({
   const {
     reasoningSteps,
     toolCalls,
+    modelSnippets,
     cliCount,
     mcpCount,
     fileCount,
@@ -186,9 +195,8 @@ export function AgentActivityCluster({
     ? outerOpenLocal
     : isTurnStreaming || completionHoldOpen || (wasTurnStreaming && !isTurnStreaming);
 
-  const hasVisibleActivity = reasoningSteps > 0 || toolCalls > 0 || cliCount > 0 || mcpCount > 0 || fileCount > 0;
+  const hasVisibleActivity = reasoningSteps > 0 || toolCalls > 0 || modelSnippets > 0 || cliCount > 0 || mcpCount > 0 || fileCount > 0;
   const hasOnlyFileActivity = fileCount > 0 && activityMessages.every(messageHasOnlyFileActivity);
-  const hasNonReasoningActivity = toolCalls > 0 || cliCount > 0 || mcpCount > 0 || fileCount > 0;
   const durationMs = activityDurationMs(
     activityMessages,
     isTurnStreaming,
@@ -197,28 +205,16 @@ export function AgentActivityCluster({
     startedAtMs,
   );
   const activityDuration = formatActivityDuration(durationMs);
-  const thoughtLabel = hasNonReasoningActivity
-    ? isTurnStreaming
-      ? t("message.activityWorkingFor", {
-          duration: activityDuration,
-          defaultValue: "Working for {{duration}}",
-        })
-      : durationMs <= 0
-        ? t("message.activityWorked", { defaultValue: "Worked" })
+  const activityLabel = isTurnStreaming
+    ? t("message.activityWorkingFor", {
+        duration: activityDuration,
+        defaultValue: "Working for {{duration}}",
+      })
+    : durationMs <= 0
+      ? t("message.activityWorked", { defaultValue: "Worked" })
       : t("message.activityWorkedFor", {
           duration: activityDuration,
           defaultValue: "Worked for {{duration}}",
-        })
-    : isTurnStreaming
-      ? t("message.activityThinkingFor", {
-          duration: activityDuration,
-          defaultValue: "Thinking for {{duration}}",
-        })
-      : durationMs <= 0
-        ? t("message.activityThought", { defaultValue: "Thought" })
-      : t("message.activityThoughtFor", {
-          duration: activityDuration,
-          defaultValue: "Thought for {{duration}}",
         });
 
   const cancelActivityScrollFrame = useCallback(() => {
@@ -338,7 +334,7 @@ export function AgentActivityCluster({
       <ThinkingReasoningShell
         active={isTurnStreaming}
         expanded={outerExpanded}
-        label={thoughtLabel}
+        label={activityLabel}
         viewportRef={activityScrollRef}
         contentRef={activityContentRef}
         fadeTop={activityScrollFade.top}
@@ -412,6 +408,12 @@ function traceLines(message: UIMessage): string[] {
   return message.content.trim() ? [message.content] : [];
 }
 
+function compactModelActivityText(content: string): string {
+  const normalized = content.replace(/\s+/g, " ").trim();
+  if (normalized.length <= 180) return normalized;
+  return `${normalized.slice(0, 177).trimEnd()}…`;
+}
+
 function ActivityMessageTimeline({
   messages,
   active,
@@ -426,6 +428,19 @@ function ActivityMessageTimeline({
   const items: ReactNode[] = [];
 
   messages.forEach((message, index) => {
+    if (message.activityKind === "model") {
+      items.push(
+        <ActivityStep
+          key={message.id}
+          icon={MessageSquareText}
+          label={compactModelActivityText(message.content)}
+          ariaLabel={message.content}
+          tone="neutral"
+          labelClassName="text-muted-foreground/78"
+        />,
+      );
+      return;
+    }
     if (isReasoningOnlyAssistant(message)) {
       items.push(
         <ReasoningRow
