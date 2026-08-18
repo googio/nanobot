@@ -899,13 +899,25 @@ export function useNanobotStream(
           ...(typeof ev.attempts === "number" ? { attempts: ev.attempts } : {}),
         };
         setRecoveryState(next);
-        if (ev.status === "resuming") setIsStreaming(true);
+        if (ev.status === "resuming") {
+          setRunStartedAt((current) => current ?? Date.now() / 1000);
+          setIsStreaming(true);
+        }
         if (
           ev.status === "awaiting_user"
           || ev.status === "recovered"
           || ev.status === "failed"
         ) {
+          // Recovery is an explicit boundary. The interrupted turn is no
+          // longer running, so do not let the stale start time keep the
+          // activity clock (or composer stop state) alive underneath the
+          // recovery notice.
+          setRunStartedAt(null);
           setIsStreaming(false);
+          cancelStreamEndTimer();
+          clearPendingStreamWork();
+          closeActiveAssistantStream();
+          clearActivitySegment();
           if (ev.status !== "recovered") {
             notifyInBackground(
               ev.status === "failed"
@@ -920,9 +932,15 @@ export function useNanobotStream(
       if (ev.event === "attached") {
         setRecoveryState(ev.recovery_state ?? null);
         if (ev.recovery_state?.status === "resuming") {
+          setRunStartedAt((current) => current ?? Date.now() / 1000);
           setIsStreaming(true);
         } else if (ev.recovery_state) {
+          setRunStartedAt(null);
           setIsStreaming(false);
+          cancelStreamEndTimer();
+          clearPendingStreamWork();
+          closeActiveAssistantStream();
+          clearActivitySegment();
         }
         return;
       }
@@ -1132,6 +1150,7 @@ export function useNanobotStream(
     applyStreamError,
     cancelStreamEndTimer,
     chatId,
+    closeActiveAssistantStream,
     client,
     clearActivitySegment,
     clearPendingStreamWork,

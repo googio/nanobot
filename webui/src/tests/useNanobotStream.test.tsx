@@ -406,6 +406,16 @@ describe("useNanobotStream", () => {
 
     act(() => {
       fake.emit("chat-recovery", {
+        event: "goal_status",
+        chat_id: "chat-recovery",
+        status: "running",
+        started_at: 1_700,
+      });
+    });
+    expect(result.current.runStartedAt).toBe(1_700);
+
+    act(() => {
+      fake.emit("chat-recovery", {
         event: "recovery_state",
         chat_id: "chat-recovery",
         recovery_id: "recovery-1",
@@ -422,6 +432,7 @@ describe("useNanobotStream", () => {
       message: "A tool may have been interrupted.",
     });
     expect(result.current.isStreaming).toBe(false);
+    expect(result.current.runStartedAt).toBeNull();
 
     await act(async () => result.current.continueRecovery());
     expect(fake.requestMutation).toHaveBeenCalledWith("recovery.continue", {

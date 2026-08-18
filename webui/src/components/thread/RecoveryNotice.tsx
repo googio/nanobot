@@ -42,7 +42,7 @@ export function RecoveryNotice({ state, onContinue, onDismiss }: RecoveryNoticeP
   return (
     <div
       role={waiting ? "alert" : "status"}
-      className="mb-2 flex items-center gap-3 rounded-control border border-border/70 bg-muted/35 px-3 py-2 text-sm"
+      className="mx-auto mb-2 flex w-full max-w-[49.5rem] items-center gap-3 rounded-control border border-border/70 bg-muted/35 px-3 py-2 text-sm"
     >
       {waiting ? (
         <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden />
