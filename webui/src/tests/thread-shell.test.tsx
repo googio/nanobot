@@ -745,7 +745,20 @@ describe("ThreadShell", () => {
       client._emitChat("fallback-model", {
         event: "turn_model_updated",
         chat_id: "fallback-model",
+        model_name: "openai-codex/gpt-5.5",
+        model_preset: "Default",
+      });
+    });
+
+    expect(configuredBadge).not.toHaveAttribute("data-fallback");
+    expect(screen.getByText("Default")).toBeInTheDocument();
+
+    act(() => {
+      client._emitChat("fallback-model", {
+        event: "turn_model_updated",
+        chat_id: "fallback-model",
         model_name: "deepseek/deepseek-chat",
+        fallback: true,
       });
     });
 

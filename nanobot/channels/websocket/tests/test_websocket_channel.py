@@ -2037,6 +2037,21 @@ async def test_send_scopes_turn_model_updates_to_the_subscribed_chat() -> None:
         "model_preset": "Deep Research",
         "context_window_tokens": 128_000,
     }
+
+    await channel.send(
+        OutboundMessage(
+            channel="websocket",
+            chat_id="chat-1",
+            content="",
+            event=TurnModelUpdatedEvent(
+                model="deepseek/deepseek-chat",
+                model_preset="Deep Research",
+                fallback=True,
+            ),
+        )
+    )
+    fallback_payload = json.loads(chat_one.send.call_args.args[0])
+    assert fallback_payload["fallback"] is True
     chat_two.send.assert_not_awaited()
 
 
